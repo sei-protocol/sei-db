@@ -263,8 +263,8 @@ func forwardIterateRocksDBConcurrently(db *grocksdb.DB, prefixes []string, concu
 	}
 
 	totalCount := 0
-	for count := range counts {
-		totalCount += count
+	for innerCount := range counts {
+		totalCount += innerCount
 	}
 	return latencySlice, totalCount
 }
@@ -350,8 +350,8 @@ func reverseIterateRocksDBConcurrently(db *grocksdb.DB, prefixes []string, concu
 	}
 
 	totalCount := 0
-	for count := range counts {
-		totalCount += count
+	for innerCount := range counts {
+		totalCount += innerCount
 	}
 	return latencySlice, totalCount
 }
