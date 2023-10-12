@@ -25,7 +25,6 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency 
 	}
 	// Create buffered channel to collect latencies with num kv entries
 	latencies := make(chan time.Duration, len(files)*chunkSize)
-	elapsedTime := make(chan time.Duration, len(files)*chunkSize)
 
 	wg := &sync.WaitGroup{}
 	processedFiles := &sync.Map{}
@@ -54,7 +53,6 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency 
 						totalWriteTime += latency
 						if err == nil {
 							latencies <- latency
-							elapsedTime <- totalWriteTime
 							break
 						}
 						retries++
