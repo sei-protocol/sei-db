@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -15,16 +16,17 @@ import (
 const rocksDBBackend = "rocksDB"
 
 var (
-	levelDBDir    string
-	modules       string
-	outputDir     string
-	dbBackend     string
-	rawKVInputDir string
-	version       int
-	concurrency   int
-	maxRetries    int
-	chunkSize     int
-	exportModules = []string{
+	levelDBDir        string
+	modules           string
+	outputDir         string
+	dbBackend         string
+	rawKVInputDir     string
+	version           int
+	concurrency       int
+	maxRetries        int
+	chunkSize         int
+	numOutputVersions int
+	exportModules     = []string{
 		"dex", "wasm", "accesscontrol", "oracle", "epoch", "mint", "acc", "bank", "crisis", "feegrant", "staking", "distribution", "slashing", "gov", "params", "ibc", "upgrade", "evidence", "transfer", "tokenfactory",
 	}
 	prefixes                 string
@@ -78,28 +80,31 @@ func init() {
 	generateCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory")
 	generateCmd.Flags().StringVar(&modules, "modules", "", "Comma separated modules to export")
 	generateCmd.Flags().IntVar(&version, "version", 0, "db version")
-	generateCmd.Flags().IntVar(&chunkSize, "chunkSize", 100, "chunk size for each kv file")
+	generateCmd.Flags().IntVar(&chunkSize, "chunk-size", 100, "chunk size for each kv file")
+	generateCmd.Flags().IntVar(&numOutputVersions, "num-output-versions", 1, "Number of output versions generated")
 
 	benchmarkWriteCmd.Flags().StringVar(&dbBackend, "db-backend", "", "DB Backend")
 	benchmarkWriteCmd.Flags().StringVar(&rawKVInputDir, "raw-kv-input-dir", "", "Input Directory for benchmark which contains the raw kv data")
 	benchmarkWriteCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory")
 	benchmarkWriteCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while writing to db")
 	benchmarkWriteCmd.Flags().IntVar(&maxRetries, "max-retries", 0, "Max Retries while writing to db")
-	benchmarkWriteCmd.Flags().IntVar(&chunkSize, "chunkSize", 100, "chunk size for each kv file")
+	benchmarkWriteCmd.Flags().IntVar(&chunkSize, "chunk-size", 100, "chunk size for each kv file")
 
 	benchmarkReadCmd.Flags().StringVar(&dbBackend, "db-backend", "", "DB Backend")
 	benchmarkReadCmd.Flags().StringVar(&rawKVInputDir, "raw-kv-input-dir", "", "Input Directory for benchmark which contains the raw kv data")
 	benchmarkReadCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory which contains db")
 	benchmarkReadCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while reading from db")
 	benchmarkReadCmd.Flags().IntVar(&maxRetries, "max-retries", 0, "Max Retries while reading from db")
-	benchmarkReadCmd.Flags().IntVar(&chunkSize, "chunkSize", 100, "chunk size for each kv file")
+	benchmarkReadCmd.Flags().IntVar(&chunkSize, "chunk-size", 100, "chunk size for each kv file")
 
 	benchmarkForwardIterationCmd.Flags().StringVar(&dbBackend, "db-backend", "", "DB Backend")
+	benchmarkForwardIterationCmd.Flags().StringVar(&rawKVInputDir, "raw-kv-input-dir", "", "Input Directory for benchmark which contains the raw kv data")
 	benchmarkForwardIterationCmd.Flags().StringVar(&prefixes, "prefixes", "", "Comma separated prefixes for forward iteration")
 	benchmarkForwardIterationCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory which contains db")
 	benchmarkForwardIterationCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while reading from db")
 
 	benchmarkReverseIterationCmd.Flags().StringVar(&dbBackend, "db-backend", "", "DB Backend")
+	benchmarkReverseIterationCmd.Flags().StringVar(&rawKVInputDir, "raw-kv-input-dir", "", "Input Directory for benchmark which contains the raw kv data")
 	benchmarkReverseIterationCmd.Flags().StringVar(&prefixes, "prefixes", "", "Comma separated prefixes for forward iteration")
 	benchmarkReverseIterationCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory which contains db")
 	benchmarkReverseIterationCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while reading from db")
@@ -119,7 +124,7 @@ func generate(cmd *cobra.Command, args []string) {
 	if modules != "" {
 		exportModules = strings.Split(modules, ",")
 	}
-	GenerateData(levelDBDir, exportModules, outputDir, version, chunkSize)
+	GenerateData(levelDBDir, exportModules, outputDir, version, chunkSize, numOutputVersions)
 }
 
 func benchmarkWrite(cmd *cobra.Command, args []string) {
@@ -169,6 +174,10 @@ func benchmarkForwardIteration(cmd *cobra.Command, args []string) {
 		panic("Must provide db backend when benchmarking")
 	}
 
+	if rawKVInputDir == "" {
+		panic("Must provide raw kv input dir when benchmarking")
+	}
+
 	if outputDir == "" {
 		panic("Must provide output dir")
 	}
@@ -188,12 +197,16 @@ func benchmarkForwardIteration(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	BenchmarkDBIteration(forwardIterationPrefixes, outputDir, dbBackend, concurrency)
+	BenchmarkDBIteration(rawKVInputDir, forwardIterationPrefixes, outputDir, dbBackend, concurrency)
 }
 
 func benchmarkReverseIteration(cmd *cobra.Command, args []string) {
 	if dbBackend == "" {
 		panic("Must provide db backend when benchmarking")
+	}
+
+	if rawKVInputDir == "" {
+		panic("Must provide raw kv input dir when benchmarking")
 	}
 
 	if outputDir == "" {
@@ -213,16 +226,18 @@ func benchmarkReverseIteration(cmd *cobra.Command, args []string) {
 
 	reverseIterationPrefixes = strings.Split(prefixes, ",")
 
-	BenchmarkDBReverseIteration(reverseIterationPrefixes, outputDir, dbBackend, concurrency)
+	BenchmarkDBReverseIteration(rawKVInputDir, reverseIterationPrefixes, outputDir, dbBackend, concurrency)
 }
 
 // Outputs the raw keys and values for all modules at a height to a file
-func GenerateData(dbDir string, modules []string, outputDir string, version int, chunkSize int) {
+func GenerateData(dbDir string, modules []string, outputDir string, version int, chunkSize int, numOutputVersions int) {
 	// Create output directory
-	err := os.MkdirAll(outputDir, fs.ModePerm)
+	baseOutputDir := filepath.Join(outputDir, "version_0")
+	err := os.MkdirAll(baseOutputDir, fs.ModePerm)
 	if err != nil {
 		panic(err)
 	}
+
 	// Generate raw kv data for each module
 	db, err := utils.OpenDB(dbDir)
 	if err != nil {
@@ -245,8 +260,19 @@ func GenerateData(dbDir string, modules []string, outputDir string, version int,
 
 		fmt.Printf("Tree hash is %X, tree size is %d\n", treeHash, tree.ImmutableTree().Size())
 
-		outputFileNamePattern := fmt.Sprintf("%s/%s", outputDir, module)
+		outputFileNamePattern := filepath.Join(baseOutputDir, module)
 		utils.WriteTreeDataToFile(tree, outputFileNamePattern, chunkSize)
+	}
+
+	// Copy the base directory to the desired number of versions
+	for i := 1; i < numOutputVersions; i++ {
+		srcDir := baseOutputDir
+		destDir := filepath.Join(outputDir, fmt.Sprintf("version_%d", i))
+		err := utils.CopyDir(srcDir, destDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error copying directory: %s\n", err)
+			return
+		}
 	}
 }
 
@@ -287,26 +313,26 @@ func BenchmarkRead(inputKVDir string, outputDir string, dbBackend string, concur
 }
 
 // Benchmark forward iteration performance of db backend
-func BenchmarkDBIteration(prefixes []string, outputDir string, dbBackend string, concurrency int) {
+func BenchmarkDBIteration(inputKVDir string, prefixes []string, outputDir string, dbBackend string, concurrency int) {
 	// Iterate over db at directory
 	fmt.Printf("Iterating Over DB at  %s\n", outputDir)
 
 	if dbBackend == rocksDBBackend {
 		backend := dbbackend.RocksDBBackend{}
-		backend.BenchmarkDBForwardIteration(prefixes, outputDir, concurrency)
+		backend.BenchmarkDBForwardIteration(inputKVDir, prefixes, outputDir, concurrency)
 	}
 
 	return
 }
 
 // Benchmark reverse iteration performance of db backend
-func BenchmarkDBReverseIteration(prefixes []string, outputDir string, dbBackend string, concurrency int) {
+func BenchmarkDBReverseIteration(inputKVDir string, prefixes []string, outputDir string, dbBackend string, concurrency int) {
 	// Reverse Iterate over db at directory
 	fmt.Printf("Reverse Iterating Over DB at  %s\n", outputDir)
 
 	if dbBackend == rocksDBBackend {
 		backend := dbbackend.RocksDBBackend{}
-		backend.BenchmarkDBReverseIteration(prefixes, outputDir, concurrency)
+		backend.BenchmarkDBReverseIteration(inputKVDir, prefixes, outputDir, concurrency)
 	}
 
 	return

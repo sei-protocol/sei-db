@@ -4,8 +4,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"io/fs"
+	"io/ioutil"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -206,4 +209,62 @@ func PickRandomItem(items []string, processedItems *sync.Map) string {
 	selected := availableItems[rand.Intn(len(availableItems))]
 	processedItems.Store(selected, true)
 	return selected
+}
+
+func CopyDir(src string, dest string) error {
+	entries, err := ioutil.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	err = os.MkdirAll(dest, fs.ModePerm)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		destPath := filepath.Join(dest, entry.Name())
+
+		if entry.IsDir() {
+			err = CopyDir(srcPath, destPath)
+			if err != nil {
+				return err
+			}
+		} else {
+			err = CopyFile(srcPath, destPath)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func CopyFile(src string, dest string) error {
+	input, err := ioutil.ReadFile(src)
+	if err != nil {
+		return err
+	}
+
+	err = ioutil.WriteFile(dest, input, fs.ModePerm)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func ListAllFiles(dir string) ([]string, error) {
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return []string{}, err
+	}
+	// Extract file nams from input KV dir
+	var fileNames []string
+	for _, file := range files {
+		fileNames = append(fileNames, file.Name())
+	}
+
+	return fileNames, nil
 }
