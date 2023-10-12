@@ -63,10 +63,16 @@ var (
 		Short: "Benchmark iteration is designed to measure forward iteration performance of different db backends",
 		Run:   benchmarkForwardIteration,
 	}
+
+	benchmarkReverseIterationCmd = &cobra.Command{
+		Use:   "benchmark-reverse-iteration",
+		Short: "Benchmark reverse iteration is designed to measure reverse iteration performance of different db backends",
+		Run:   benchmarkReverseIteration,
+	}
 )
 
 func init() {
-	rootCmd.AddCommand(generateCmd, benchmarkWriteCmd, benchmarkReadCmd, benchmarkForwardIterationCmd)
+	rootCmd.AddCommand(generateCmd, benchmarkWriteCmd, benchmarkReadCmd, benchmarkForwardIterationCmd, benchmarkReverseIterationCmd)
 
 	generateCmd.Flags().StringVar(&levelDBDir, "leveldb-dir", "/root/.sei/data/application.db", "level db dir")
 	generateCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory")
@@ -88,10 +94,10 @@ func init() {
 	benchmarkReadCmd.Flags().IntVar(&maxRetries, "max-retries", 0, "Max Retries while reading from db")
 	benchmarkReadCmd.Flags().IntVar(&chunkSize, "chunkSize", 100, "chunk size for each kv file")
 
-	benchmarkForwardIterationCmd.Flags().StringVar(&dbBackend, "db-backend", "", "DB Backend")
-	benchmarkForwardIterationCmd.Flags().StringVar(&prefixes, "prefixes", "", "Comma separated prefixes for forward iteration")
-	benchmarkForwardIterationCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory which contains db")
-	benchmarkForwardIterationCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while reading from db")
+	benchmarkReverseIterationCmd.Flags().StringVar(&dbBackend, "db-backend", "", "DB Backend")
+	benchmarkReverseIterationCmd.Flags().StringVar(&prefixes, "prefixes", "", "Comma separated prefixes for forward iteration")
+	benchmarkReverseIterationCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory which contains db")
+	benchmarkReverseIterationCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while reading from db")
 }
 
 func main() {
@@ -180,6 +186,33 @@ func benchmarkForwardIteration(cmd *cobra.Command, args []string) {
 	BenchmarkDBIteration(forwardIterationPrefixes, outputDir, dbBackend, concurrency)
 }
 
+func benchmarkReverseIteration(cmd *cobra.Command, args []string) {
+	if dbBackend == "" {
+		panic("Must provide db backend when benchmarking")
+	}
+
+	if outputDir == "" {
+		panic("Must provide output dir")
+	}
+
+	_, isAcceptedBackend := validDBBackends[dbBackend]
+	if !isAcceptedBackend {
+		panic(fmt.Sprintf("Unsupported db backend: %s\n", dbBackend))
+	}
+
+	if prefixes != "" {
+		reverseIterationPrefixes = strings.Split(prefixes, ",")
+	} else {
+		// Use module prefixes as default
+		for _, module := range modules {
+			modulePrefix := fmt.Sprintf("s/k:%s/", module)
+			reverseIterationPrefixes = append(reverseIterationPrefixes, modulePrefix)
+		}
+	}
+
+	BenchmarkDBReverseIteration(reverseIterationPrefixes, outputDir, dbBackend, concurrency)
+}
+
 // Outputs the raw keys and values for all modules at a height to a file
 func GenerateData(dbDir string, modules []string, outputDir string, version int, chunkSize int) {
 	// Create output directory
@@ -250,14 +283,27 @@ func BenchmarkRead(inputKVDir string, outputDir string, dbBackend string, concur
 	return
 }
 
-// Benchmark forward iteration latencies and throughput of db backend
+// Benchmark forward iteration performance of db backend
 func BenchmarkDBIteration(prefixes []string, outputDir string, dbBackend string, concurrency int) {
-	// Iterate over files in directory
+	// Iterate over db at directory
 	fmt.Printf("Iterating Over DB at  %s\n", outputDir)
 
 	if dbBackend == rocksDBBackend {
 		backend := dbbackend.RocksDBBackend{}
 		backend.BenchmarkDBForwardIteration(prefixes, outputDir, concurrency)
+	}
+
+	return
+}
+
+// Benchmark reverse iteration performance of db backend
+func BenchmarkDBReverseIteration(prefixes []string, outputDir string, dbBackend string, concurrency int) {
+	// Reverse Iterate over db at directory
+	fmt.Printf("Reverse Iterating Over DB at  %s\n", outputDir)
+
+	if dbBackend == rocksDBBackend {
+		backend := dbbackend.RocksDBBackend{}
+		backend.BenchmarkDBReverseIteration(prefixes, outputDir, concurrency)
 	}
 
 	return

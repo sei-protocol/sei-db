@@ -14,7 +14,6 @@ import (
 )
 
 func writeToRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency int, maxRetries int, chunkSize int) []time.Duration {
-	// Create buffered channel to collect latencies with num kv entries
 	files, err := ioutil.ReadDir(inputKVDir)
 	if err != nil {
 		panic(err)
@@ -24,7 +23,9 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency 
 	for _, file := range files {
 		fileNames = append(fileNames, file.Name())
 	}
+	// Create buffered channel to collect latencies with num kv entries
 	latencies := make(chan time.Duration, len(files)*chunkSize)
+	elapsedTime := make(chan time.Duration, len(files)*chunkSize)
 
 	wg := &sync.WaitGroup{}
 	processedFiles := &sync.Map{}
@@ -45,12 +46,15 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency 
 
 				for _, kv := range kvEntries {
 					retries := 0
+					totalWriteTime := time.Duration(0)
 					for {
 						startTime := time.Now()
 						err := db.Put(wo, kv.Key, kv.Value)
 						latency := time.Since(startTime)
+						totalWriteTime += latency
 						if err == nil {
 							latencies <- latency
+							elapsedTime <- totalWriteTime
 							break
 						}
 						retries++
@@ -118,7 +122,6 @@ func (rocksDB RocksDBBackend) BenchmarkDBWrite(inputKVDir string, outputDBPath s
 }
 
 func readFromRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency int, maxRetries int, chunkSize int) []time.Duration {
-	// Create buffered channel to collect latencies with num kv entries
 	files, err := ioutil.ReadDir(inputKVDir)
 	if err != nil {
 		panic(err)
@@ -128,6 +131,7 @@ func readFromRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency
 	for _, file := range files {
 		fileNames = append(fileNames, file.Name())
 	}
+	// Create buffered channel to collect latencies with num kv entries
 	latencies := make(chan time.Duration, len(files)*chunkSize)
 
 	processedFiles := &sync.Map{}
@@ -218,9 +222,10 @@ func (rocksDB RocksDBBackend) BenchmarkDBRead(inputKVDir string, outputDBPath st
 	fmt.Printf("P99 Latency: %v\n", utils.CalculatePercentile(latencies, 99))
 }
 
-func forwardIterateRocksDBConcurrently(db *grocksdb.DB, prefixes []string, concurrency int) []time.Duration {
-	// Store latencies in buffered channel
+func forwardIterateRocksDBConcurrently(db *grocksdb.DB, prefixes []string, concurrency int) ([]time.Duration, int) {
+	// Create buffered channel to collect latencies with num prefixes entries
 	latencies := make(chan time.Duration, len(prefixes))
+	counts := make(chan int, len(prefixes))
 
 	processedPrefixes := &sync.Map{}
 	wg := &sync.WaitGroup{}
@@ -240,25 +245,35 @@ func forwardIterateRocksDBConcurrently(db *grocksdb.DB, prefixes []string, concu
 
 				iter := db.NewIterator(ro)
 				defer iter.Close()
+
+				count := 0
 				for iter.Seek([]byte(selectedPrefix)); iter.ValidForPrefix([]byte(selectedPrefix)); iter.Next() {
-					// Do nothing, just iterate.
+					count++
 				}
 
 				latency := time.Since(startTime)
 				latencies <- latency
+				counts <- count
 			}
 		}()
 	}
 	wg.Wait()
 	close(latencies)
+	close(counts)
 
 	var latencySlice []time.Duration
 	for l := range latencies {
 		latencySlice = append(latencySlice, l)
 	}
-	return latencySlice
+
+	totalCount := 0
+	for count := range counts {
+		totalCount += count
+	}
+	return latencySlice, totalCount
 }
 
+// TODO: Add Random key iteration latency
 func (rocksDB RocksDBBackend) BenchmarkDBForwardIteration(prefixes []string, outputDBPath string, concurrency int) {
 	// Open the DB with default options
 	opts := grocksdb.NewDefaultOptions()
@@ -274,29 +289,108 @@ func (rocksDB RocksDBBackend) BenchmarkDBForwardIteration(prefixes []string, out
 	defer db.Close()
 
 	startTime := time.Now()
-	latencies := forwardIterateRocksDBConcurrently(db, prefixes, concurrency)
+	latencies, totalCountIteration := forwardIterateRocksDBConcurrently(db, prefixes, concurrency)
 	endTime := time.Now()
 
 	totalTime := endTime.Sub(startTime)
 
 	// Log throughput
-	totalIterations := len(prefixes)
-	fmt.Printf("Total Prefixes Iterated: %d\n", totalIterations)
+	fmt.Printf("Total Prefixes Iterated: %d\n", totalCountIteration)
 	fmt.Printf("Total Time taken: %v\n", totalTime)
-	fmt.Printf("Throughput: %f iterations/sec\n", float64(totalIterations)/totalTime.Seconds())
-
-	// Sort latencies for percentile calculations
-	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	fmt.Printf("Throughput: %f iterations/sec\n", float64(totalCountIteration)/totalTime.Seconds())
 
 	// Calculate average latency
 	var totalLatency time.Duration
 	for _, l := range latencies {
 		totalLatency += l
 	}
-	avgLatency := totalLatency / time.Duration(len(latencies))
+	avgLatency := time.Duration(int64(totalLatency) / int64(totalCountIteration))
+	fmt.Printf("Average Per-Key Latency: %v\n", avgLatency)
+}
 
-	fmt.Printf("Average Latency: %v\n", avgLatency)
-	fmt.Printf("P50 Latency: %v\n", utils.CalculatePercentile(latencies, 50))
-	fmt.Printf("P75 Latency: %v\n", utils.CalculatePercentile(latencies, 75))
-	fmt.Printf("P99 Latency: %v\n", utils.CalculatePercentile(latencies, 99))
+// NOTE: This reverse iterates from the prefixes provided. Will add tooling to help generate these end prefixes (can store from forward iteration)
+func reverseIterateRocksDBConcurrently(db *grocksdb.DB, prefixes []string, concurrency int) ([]time.Duration, int) {
+	// Create buffered channel to collect latencies with num prefixes entries
+	latencies := make(chan time.Duration, len(prefixes))
+	counts := make(chan int, len(prefixes))
+
+	processedPrefixes := &sync.Map{}
+	wg := &sync.WaitGroup{}
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ro := grocksdb.NewDefaultReadOptions()
+			for {
+				selectedPrefix := utils.PickRandomItem(prefixes, processedPrefixes)
+				if selectedPrefix == "" {
+					break
+				}
+
+				startTime := time.Now()
+
+				iter := db.NewIterator(ro)
+				defer iter.Close()
+
+				count := 0
+				for iter.SeekForPrev([]byte(selectedPrefix)); iter.ValidForPrefix([]byte(selectedPrefix)); iter.Prev() {
+					count++
+				}
+
+				latency := time.Since(startTime)
+				latencies <- latency
+				counts <- count
+			}
+		}()
+	}
+	wg.Wait()
+	close(latencies)
+	close(counts)
+
+	var latencySlice []time.Duration
+	for l := range latencies {
+		latencySlice = append(latencySlice, l)
+	}
+
+	totalCount := 0
+	for count := range counts {
+		totalCount += count
+	}
+	return latencySlice, totalCount
+}
+
+// TODO: Add Random key iteration latency
+func (rocksDB RocksDBBackend) BenchmarkDBReverseIteration(prefixes []string, outputDBPath string, concurrency int) {
+	// Open the DB with default options
+	opts := grocksdb.NewDefaultOptions()
+	opts.IncreaseParallelism(runtime.NumCPU())
+	opts.OptimizeLevelStyleCompaction(512 * 1024 * 1024)
+	opts.SetTargetFileSizeMultiplier(2)
+	opts.SetOptimizeFiltersForHits(true)
+
+	db, err := grocksdb.OpenDb(opts, outputDBPath)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to open the DB: %v", err))
+	}
+	defer db.Close()
+
+	startTime := time.Now()
+	latencies, totalCountIteration := reverseIterateRocksDBConcurrently(db, prefixes, concurrency)
+	endTime := time.Now()
+
+	totalTime := endTime.Sub(startTime)
+
+	// Log throughput
+	fmt.Printf("Total Prefixes Reverse-Iterated: %d\n", totalCountIteration)
+	fmt.Printf("Total Time taken: %v\n", totalTime)
+	fmt.Printf("Throughput: %f iterations/sec\n", float64(totalCountIteration)/totalTime.Seconds())
+
+	// Calculate average latency
+	var totalLatency time.Duration
+	for _, l := range latencies {
+		totalLatency += l
+	}
+	avgLatency := time.Duration(int64(totalLatency) / int64(totalCountIteration))
+	fmt.Printf("Average Per-Key Latency: %v\n", avgLatency)
 }
