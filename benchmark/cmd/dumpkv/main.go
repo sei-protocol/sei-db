@@ -94,6 +94,11 @@ func init() {
 	benchmarkReadCmd.Flags().IntVar(&maxRetries, "max-retries", 0, "Max Retries while reading from db")
 	benchmarkReadCmd.Flags().IntVar(&chunkSize, "chunkSize", 100, "chunk size for each kv file")
 
+	benchmarkForwardIterationCmd.Flags().StringVar(&dbBackend, "db-backend", "", "DB Backend")
+	benchmarkForwardIterationCmd.Flags().StringVar(&prefixes, "prefixes", "", "Comma separated prefixes for forward iteration")
+	benchmarkForwardIterationCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory which contains db")
+	benchmarkForwardIterationCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while reading from db")
+
 	benchmarkReverseIterationCmd.Flags().StringVar(&dbBackend, "db-backend", "", "DB Backend")
 	benchmarkReverseIterationCmd.Flags().StringVar(&prefixes, "prefixes", "", "Comma separated prefixes for forward iteration")
 	benchmarkReverseIterationCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory which contains db")
