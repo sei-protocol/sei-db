@@ -200,15 +200,13 @@ func benchmarkReverseIteration(cmd *cobra.Command, args []string) {
 		panic(fmt.Sprintf("Unsupported db backend: %s\n", dbBackend))
 	}
 
-	if prefixes != "" {
-		reverseIterationPrefixes = strings.Split(prefixes, ",")
-	} else {
-		// Use module prefixes as default
-		for _, module := range modules {
-			modulePrefix := fmt.Sprintf("s/k:%s/", module)
-			reverseIterationPrefixes = append(reverseIterationPrefixes, modulePrefix)
-		}
+	// Specify prefixes here. Can forward iterate and retrieve keys
+	// NOTE: Will add reference keys + add in random prefix iteration
+	if prefixes == "" {
+		panic("Must provide reverse iteration prefixes")
 	}
+
+	reverseIterationPrefixes = strings.Split(prefixes, ",")
 
 	BenchmarkDBReverseIteration(reverseIterationPrefixes, outputDir, dbBackend, concurrency)
 }
