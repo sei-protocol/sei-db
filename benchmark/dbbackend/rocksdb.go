@@ -45,12 +45,10 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency 
 
 				for _, kv := range kvEntries {
 					retries := 0
-					totalWriteTime := time.Duration(0)
 					for {
 						startTime := time.Now()
 						err := db.Put(wo, kv.Key, kv.Value)
 						latency := time.Since(startTime)
-						totalWriteTime += latency
 						if err == nil {
 							latencies <- latency
 							break
