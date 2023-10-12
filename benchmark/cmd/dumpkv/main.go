@@ -16,24 +16,22 @@ import (
 const rocksDBBackend = "rocksDB"
 
 var (
-	levelDBDir        string
-	modules           string
-	outputDir         string
-	dbBackend         string
-	rawKVInputDir     string
-	version           int
-	concurrency       int
-	maxRetries        int
-	chunkSize         int
-	numOutputVersions int
-	exportModules     = []string{
+	levelDBDir           string
+	modules              string
+	outputDir            string
+	dbBackend            string
+	rawKVInputDir        string
+	version              int
+	concurrency          int
+	maxRetries           int
+	chunkSize            int
+	numOutputVersions    int
+	maxIterationsPerFile int
+	iterationSteps       int
+	exportModules        = []string{
 		"dex", "wasm", "accesscontrol", "oracle", "epoch", "mint", "acc", "bank", "crisis", "feegrant", "staking", "distribution", "slashing", "gov", "params", "ibc", "upgrade", "evidence", "transfer", "tokenfactory",
 	}
-	prefixes                 string
-	forwardIterationPrefixes []string
-	// TODO: Create list of preset prefixes to reverse iterate from => can do this after each forward iteration
-	reverseIterationPrefixes []string
-	validDBBackends          = map[string]bool{
+	validDBBackends = map[string]bool{
 		rocksDBBackend: true,
 	}
 
@@ -99,15 +97,17 @@ func init() {
 
 	benchmarkForwardIterationCmd.Flags().StringVar(&dbBackend, "db-backend", "", "DB Backend")
 	benchmarkForwardIterationCmd.Flags().StringVar(&rawKVInputDir, "raw-kv-input-dir", "", "Input Directory for benchmark which contains the raw kv data")
-	benchmarkForwardIterationCmd.Flags().StringVar(&prefixes, "prefixes", "", "Comma separated prefixes for forward iteration")
 	benchmarkForwardIterationCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory which contains db")
 	benchmarkForwardIterationCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while reading from db")
+	benchmarkForwardIterationCmd.Flags().IntVar(&maxIterationsPerFile, "max-iterations-per-file", 1, "Max iterations to run")
+	benchmarkForwardIterationCmd.Flags().IntVar(&iterationSteps, "iteration-steps", 10, "Number of steps to run per iteration")
 
 	benchmarkReverseIterationCmd.Flags().StringVar(&dbBackend, "db-backend", "", "DB Backend")
 	benchmarkReverseIterationCmd.Flags().StringVar(&rawKVInputDir, "raw-kv-input-dir", "", "Input Directory for benchmark which contains the raw kv data")
-	benchmarkReverseIterationCmd.Flags().StringVar(&prefixes, "prefixes", "", "Comma separated prefixes for forward iteration")
 	benchmarkReverseIterationCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory which contains db")
 	benchmarkReverseIterationCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while reading from db")
+	benchmarkReverseIterationCmd.Flags().IntVar(&maxIterationsPerFile, "max-iterations-per-file", 1, "Max iterations to run")
+	benchmarkReverseIterationCmd.Flags().IntVar(&iterationSteps, "iteration-steps", 10, "Number of steps to run per iteration")
 }
 
 func main() {
@@ -187,17 +187,7 @@ func benchmarkForwardIteration(cmd *cobra.Command, args []string) {
 		panic(fmt.Sprintf("Unsupported db backend: %s\n", dbBackend))
 	}
 
-	if prefixes != "" {
-		forwardIterationPrefixes = strings.Split(prefixes, ",")
-	} else {
-		// Use module prefixes as default
-		for _, module := range modules {
-			modulePrefix := fmt.Sprintf("s/k:%s/", module)
-			forwardIterationPrefixes = append(forwardIterationPrefixes, modulePrefix)
-		}
-	}
-
-	BenchmarkDBIteration(rawKVInputDir, forwardIterationPrefixes, outputDir, dbBackend, concurrency)
+	BenchmarkDBIteration(rawKVInputDir, outputDir, dbBackend, concurrency, maxIterationsPerFile, iterationSteps)
 }
 
 func benchmarkReverseIteration(cmd *cobra.Command, args []string) {
@@ -218,15 +208,7 @@ func benchmarkReverseIteration(cmd *cobra.Command, args []string) {
 		panic(fmt.Sprintf("Unsupported db backend: %s\n", dbBackend))
 	}
 
-	// Specify prefixes here. Can forward iterate and retrieve keys
-	// NOTE: Will add reference keys + add in random prefix iteration
-	if prefixes == "" {
-		panic("Must provide reverse iteration prefixes")
-	}
-
-	reverseIterationPrefixes = strings.Split(prefixes, ",")
-
-	BenchmarkDBReverseIteration(rawKVInputDir, reverseIterationPrefixes, outputDir, dbBackend, concurrency)
+	BenchmarkDBReverseIteration(rawKVInputDir, outputDir, dbBackend, concurrency, maxIterationsPerFile, iterationSteps)
 }
 
 // Outputs the raw keys and values for all modules at a height to a file
@@ -313,26 +295,26 @@ func BenchmarkRead(inputKVDir string, outputDir string, dbBackend string, concur
 }
 
 // Benchmark forward iteration performance of db backend
-func BenchmarkDBIteration(inputKVDir string, prefixes []string, outputDir string, dbBackend string, concurrency int) {
+func BenchmarkDBIteration(inputKVDir string, outputDir string, dbBackend string, concurrency int, maxIterations int, iterationSteps int) {
 	// Iterate over db at directory
 	fmt.Printf("Iterating Over DB at  %s\n", outputDir)
 
 	if dbBackend == rocksDBBackend {
 		backend := dbbackend.RocksDBBackend{}
-		backend.BenchmarkDBForwardIteration(inputKVDir, prefixes, outputDir, concurrency)
+		backend.BenchmarkDBForwardIteration(inputKVDir, outputDir, concurrency, maxIterations, iterationSteps)
 	}
 
 	return
 }
 
 // Benchmark reverse iteration performance of db backend
-func BenchmarkDBReverseIteration(inputKVDir string, prefixes []string, outputDir string, dbBackend string, concurrency int) {
+func BenchmarkDBReverseIteration(inputKVDir string, outputDir string, dbBackend string, concurrency int, maxIterations int, iterationSteps int) {
 	// Reverse Iterate over db at directory
-	fmt.Printf("Reverse Iterating Over DB at  %s\n", outputDir)
+	fmt.Printf("Iterating Over DB at  %s\n", outputDir)
 
 	if dbBackend == rocksDBBackend {
 		backend := dbbackend.RocksDBBackend{}
-		backend.BenchmarkDBReverseIteration(inputKVDir, prefixes, outputDir, concurrency)
+		backend.BenchmarkDBReverseIteration(inputKVDir, outputDir, concurrency, maxIterations, iterationSteps)
 	}
 
 	return

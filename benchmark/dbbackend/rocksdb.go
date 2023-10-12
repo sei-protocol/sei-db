@@ -43,6 +43,7 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb.
 			go func() {
 				defer wg.Done()
 				wo := grocksdb.NewDefaultWriteOptions()
+				defer wo.Destroy()
 
 				for {
 					filename := utils.PickRandomItem(allFiles, processedFiles)
@@ -164,6 +165,7 @@ func readFromRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb
 			go func() {
 				defer wg.Done()
 				ro := grocksdb.NewDefaultReadOptions()
+				defer ro.Destroy()
 				for {
 					filename := utils.PickRandomItem(allFiles, processedFiles)
 					if filename == "" {
@@ -253,7 +255,7 @@ func (rocksDB RocksDBBackend) BenchmarkDBRead(inputKVDir string, outputDBPath st
 	fmt.Printf("P99 Latency: %v\n", utils.CalculatePercentile(latencies, 99))
 }
 
-func forwardIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb.ColumnFamilyHandle, inputDir string, prefixes []string, concurrency int) ([]time.Duration, int) {
+func forwardIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb.ColumnFamilyHandle, inputDir string, concurrency int, maxIterationsPerFile int, iterationSteps int) ([]time.Duration, int) {
 	// Fetch version directories
 	versionDirs, err := ioutil.ReadDir(inputDir)
 	if err != nil {
@@ -268,17 +270,15 @@ func forwardIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*gr
 			continue
 		}
 
-		// Get the cfHandle for the current version
-		version := versionDir.Name()
-		cfHandle, exists := cfHandles[version]
-		if !exists {
-			panic(fmt.Sprintf("No handle found for version: %s", version))
+		versionPath := filepath.Join(inputDir, versionDir.Name())
+		allFiles, err := utils.ListAllFiles(versionPath)
+		if err != nil {
+			panic(err)
 		}
 
-		latencies := make(chan time.Duration, len(versionDirs)*len(prefixes))
-		counts := make(chan int, len(versionDirs)*len(prefixes))
-
-		processedPrefixes := &sync.Map{}
+		latencies := make(chan time.Duration, len(allFiles)*maxIterationsPerFile)
+		counts := make(chan int, len(allFiles)*maxIterationsPerFile)
+		processedFiles := &sync.Map{}
 		wg := &sync.WaitGroup{}
 
 		for i := 0; i < concurrency; i++ {
@@ -286,25 +286,48 @@ func forwardIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*gr
 			go func() {
 				defer wg.Done()
 				ro := grocksdb.NewDefaultReadOptions()
+				defer ro.Destroy()
 
 				for {
-					selectedPrefix := utils.PickRandomItem(prefixes, processedPrefixes)
-					if selectedPrefix == "" {
+					filename := utils.PickRandomItem(allFiles, processedFiles)
+					if filename == "" {
 						break
 					}
 
-					startTime := time.Now()
-					iter := db.NewIteratorCF(ro, cfHandle)
-					defer iter.Close()
-
-					count := 0
-					for iter.Seek([]byte(selectedPrefix)); iter.ValidForPrefix([]byte(selectedPrefix)); iter.Next() {
-						count++
+					// Retrieve column family for the version
+					version := filepath.Base(filepath.Dir(filename))
+					cfHandle, exists := cfHandles[version]
+					if !exists {
+						panic(fmt.Sprintf("No handle found for version: %s", version))
 					}
 
-					latency := time.Since(startTime)
-					latencies <- latency
-					counts <- count
+					kvEntries, _ := utils.ReadKVEntriesFromFile(filename)
+					utils.RandomShuffle(kvEntries)
+
+					iterationCounter := 0
+
+					for _, kv := range kvEntries {
+						if iterationCounter >= maxIterationsPerFile {
+							break
+						}
+						iterationCounter++
+
+						startKey := kv.Key
+						startTime := time.Now()
+						iter := db.NewIteratorCF(ro, cfHandle)
+						defer iter.Close()
+
+						iter.Seek(startKey)
+						steps := 0
+						// TODO: We can potentially randomly select iterationSteps
+						for ; iter.Valid() && steps < iterationSteps; iter.Next() {
+							steps++
+						}
+
+						latency := time.Since(startTime)
+						latencies <- latency
+						counts <- steps
+					}
 				}
 			}()
 		}
@@ -324,7 +347,7 @@ func forwardIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*gr
 }
 
 // TODO: Add Random key iteration latency
-func (rocksDB RocksDBBackend) BenchmarkDBForwardIteration(inputKVDir string, prefixes []string, outputDBPath string, concurrency int) {
+func (rocksDB RocksDBBackend) BenchmarkDBForwardIteration(inputKVDir string, outputDBPath string, concurrency int, maxIterationsPerFile int, iterationSteps int) {
 	// Open the DB with default options
 	opts := grocksdb.NewDefaultOptions()
 	opts.IncreaseParallelism(runtime.NumCPU())
@@ -341,7 +364,7 @@ func (rocksDB RocksDBBackend) BenchmarkDBForwardIteration(inputKVDir string, pre
 	defer db.Close()
 
 	startTime := time.Now()
-	latencies, totalCountIteration := forwardIterateRocksDBConcurrently(db, cfHandleMap, inputKVDir, prefixes, concurrency)
+	latencies, totalCountIteration := forwardIterateRocksDBConcurrently(db, cfHandleMap, inputKVDir, concurrency, maxIterationsPerFile, iterationSteps)
 	endTime := time.Now()
 
 	totalTime := endTime.Sub(startTime)
@@ -360,7 +383,7 @@ func (rocksDB RocksDBBackend) BenchmarkDBForwardIteration(inputKVDir string, pre
 	fmt.Printf("Average Per-Key Latency: %v\n", avgLatency)
 }
 
-func reverseIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb.ColumnFamilyHandle, inputDir string, prefixes []string, concurrency int) ([]time.Duration, int) {
+func reverseIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb.ColumnFamilyHandle, inputDir string, concurrency int, maxIterationsPerFile int, iterationSteps int) ([]time.Duration, int) {
 	// Fetch version directories
 	versionDirs, err := ioutil.ReadDir(inputDir)
 	if err != nil {
@@ -375,17 +398,15 @@ func reverseIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*gr
 			continue
 		}
 
-		// Get the cfHandle for the current version
-		version := versionDir.Name()
-		cfHandle, exists := cfHandles[version]
-		if !exists {
-			panic(fmt.Sprintf("No handle found for version: %s", version))
+		versionPath := filepath.Join(inputDir, versionDir.Name())
+		allFiles, err := utils.ListAllFiles(versionPath)
+		if err != nil {
+			panic(err)
 		}
 
-		latencies := make(chan time.Duration, len(versionDirs)*len(prefixes))
-		counts := make(chan int, len(versionDirs)*len(prefixes))
-
-		processedPrefixes := &sync.Map{}
+		latencies := make(chan time.Duration, len(allFiles)*maxIterationsPerFile)
+		counts := make(chan int, len(allFiles)*maxIterationsPerFile)
+		processedFiles := &sync.Map{}
 		wg := &sync.WaitGroup{}
 
 		for i := 0; i < concurrency; i++ {
@@ -393,25 +414,48 @@ func reverseIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*gr
 			go func() {
 				defer wg.Done()
 				ro := grocksdb.NewDefaultReadOptions()
+				defer ro.Destroy()
 
 				for {
-					selectedPrefix := utils.PickRandomItem(prefixes, processedPrefixes)
-					if selectedPrefix == "" {
+					filename := utils.PickRandomItem(allFiles, processedFiles)
+					if filename == "" {
 						break
 					}
 
-					startTime := time.Now()
-					iter := db.NewIteratorCF(ro, cfHandle)
-					defer iter.Close()
-
-					count := 0
-					for iter.SeekForPrev([]byte(selectedPrefix)); iter.ValidForPrefix([]byte(selectedPrefix)); iter.Prev() {
-						count++
+					// Retrieve column family for the version
+					version := filepath.Base(filepath.Dir(filename))
+					cfHandle, exists := cfHandles[version]
+					if !exists {
+						panic(fmt.Sprintf("No handle found for version: %s", version))
 					}
 
-					latency := time.Since(startTime)
-					latencies <- latency
-					counts <- count
+					kvEntries, _ := utils.ReadKVEntriesFromFile(filename)
+					utils.RandomShuffle(kvEntries)
+
+					iterationCounter := 0
+
+					for _, kv := range kvEntries {
+						if iterationCounter >= maxIterationsPerFile {
+							break
+						}
+						iterationCounter++
+
+						startKey := kv.Key
+						startTime := time.Now()
+						iter := db.NewIteratorCF(ro, cfHandle)
+						defer iter.Close()
+
+						iter.Seek(startKey)
+						steps := 0
+						// TODO: We can potentially randomly select iterationSteps
+						for ; iter.Valid() && steps < iterationSteps; iter.Prev() {
+							steps++
+						}
+
+						latency := time.Since(startTime)
+						latencies <- latency
+						counts <- steps
+					}
 				}
 			}()
 		}
@@ -431,7 +475,7 @@ func reverseIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*gr
 }
 
 // TODO: Add Random key iteration latency
-func (rocksDB RocksDBBackend) BenchmarkDBReverseIteration(inputKVDir string, prefixes []string, outputDBPath string, concurrency int) {
+func (rocksDB RocksDBBackend) BenchmarkDBReverseIteration(inputKVDir string, outputDBPath string, concurrency int, maxIterationsPerFile int, iterationSteps int) {
 	// Open the DB with default options
 	opts := grocksdb.NewDefaultOptions()
 	opts.IncreaseParallelism(runtime.NumCPU())
@@ -448,15 +492,15 @@ func (rocksDB RocksDBBackend) BenchmarkDBReverseIteration(inputKVDir string, pre
 	defer db.Close()
 
 	startTime := time.Now()
-	latencies, totalCountIteration := reverseIterateRocksDBConcurrently(db, cfHandleMap, inputKVDir, prefixes, concurrency)
+	latencies, totalCountIteration := reverseIterateRocksDBConcurrently(db, cfHandleMap, inputKVDir, concurrency, maxIterationsPerFile, iterationSteps)
 	endTime := time.Now()
 
 	totalTime := endTime.Sub(startTime)
 
 	// Log throughput
-	fmt.Printf("Total Prefixes Reverse-Iterated: %d\n", totalCountIteration)
+	fmt.Printf("Total Prefixes Reverse Iterated: %d\n", totalCountIteration)
 	fmt.Printf("Total Time taken: %v\n", totalTime)
-	fmt.Printf("Throughput: %f reverse-iterations/sec\n", float64(totalCountIteration)/totalTime.Seconds())
+	fmt.Printf("Throughput: %f iterations/sec\n", float64(totalCountIteration)/totalTime.Seconds())
 
 	// Calculate average latency
 	var totalLatency time.Duration
