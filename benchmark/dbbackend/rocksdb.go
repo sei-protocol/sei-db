@@ -98,6 +98,7 @@ func (rocksDB RocksDBBackend) BenchmarkDBWrite(inputKVDir string, outputDBPath s
 	opts.SetOptimizeFiltersForHits(true)
 	opts.SetCreateIfMissing(true)
 	opts.SetCreateIfMissingColumnFamilies(true)
+	opts.EnableStatistics()
 
 	// Initialize db
 	db, cfHandleMap, err := initializeDBWithColumnFamilies(opts, outputDBPath, inputKVDir)
@@ -215,6 +216,7 @@ func (rocksDB RocksDBBackend) BenchmarkDBRead(inputKVDir string, outputDBPath st
 	opts.OptimizeLevelStyleCompaction(512 * 1024 * 1024)
 	opts.SetTargetFileSizeMultiplier(2)
 	opts.SetOptimizeFiltersForHits(true)
+	opts.EnableStatistics()
 
 	// Initialize db
 	db, cfHandleMap, err := initializeDBWithColumnFamilies(opts, outputDBPath, inputKVDir)
@@ -329,6 +331,7 @@ func (rocksDB RocksDBBackend) BenchmarkDBForwardIteration(inputKVDir string, pre
 	opts.OptimizeLevelStyleCompaction(512 * 1024 * 1024)
 	opts.SetTargetFileSizeMultiplier(2)
 	opts.SetOptimizeFiltersForHits(true)
+	opts.EnableStatistics()
 
 	// Initialize db
 	db, cfHandleMap, err := initializeDBWithColumnFamilies(opts, outputDBPath, inputKVDir)
@@ -435,6 +438,7 @@ func (rocksDB RocksDBBackend) BenchmarkDBReverseIteration(inputKVDir string, pre
 	opts.OptimizeLevelStyleCompaction(512 * 1024 * 1024)
 	opts.SetTargetFileSizeMultiplier(2)
 	opts.SetOptimizeFiltersForHits(true)
+	opts.EnableStatistics()
 
 	// Initialize db
 	db, cfHandleMap, err := initializeDBWithColumnFamilies(opts, outputDBPath, inputKVDir)
