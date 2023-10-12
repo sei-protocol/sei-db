@@ -14,6 +14,31 @@ import (
 	"github.com/sei-protocol/sei-db/benchmark/utils"
 )
 
+func NewRocksDBOpts() *grocksdb.Options {
+	opts := grocksdb.NewDefaultOptions()
+	opts.IncreaseParallelism(runtime.NumCPU())
+	opts.OptimizeLevelStyleCompaction(512 * 1024 * 1024)
+	opts.SetTargetFileSizeMultiplier(2)
+	opts.SetLevelCompactionDynamicLevelBytes(true)
+	opts.EnableStatistics()
+
+	// block based table options
+	bbto := grocksdb.NewDefaultBlockBasedTableOptions()
+
+	// 1G block cache
+	bbto.SetBlockSize(32 * 1024)
+	bbto.SetBlockCache(grocksdb.NewLRUCache(1 << 30))
+
+	bbto.SetFilterPolicy(grocksdb.NewRibbonHybridFilterPolicy(9.9, 1))
+	bbto.SetIndexType(grocksdb.KBinarySearchWithFirstKey)
+	bbto.SetOptimizeFiltersForMemory(true)
+	opts.SetBlockBasedTableFactory(bbto)
+	// improve sst file creation speed: compaction or sst file writer.
+	opts.SetCompressionOptionsParallelThreads(4)
+
+	return opts
+}
+
 func writeToRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb.ColumnFamilyHandle, inputDir string, concurrency int, maxRetries int, chunkSize int) []time.Duration {
 	versionDirs, err := ioutil.ReadDir(inputDir)
 	if err != nil {
@@ -91,15 +116,10 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb.
 }
 
 func (rocksDB RocksDBBackend) BenchmarkDBWrite(inputKVDir string, outputDBPath string, concurrency int, maxRetries int, chunkSize int) {
-	opts := grocksdb.NewDefaultOptions()
+	opts := NewRocksDBOpts()
 	// Configs taken from implementations
-	opts.IncreaseParallelism(runtime.NumCPU())
-	opts.OptimizeLevelStyleCompaction(512 * 1024 * 1024)
-	opts.SetTargetFileSizeMultiplier(2)
-	opts.SetOptimizeFiltersForHits(true)
 	opts.SetCreateIfMissing(true)
 	opts.SetCreateIfMissingColumnFamilies(true)
-	opts.EnableStatistics()
 
 	// Initialize db
 	db, cfHandleMap, err := initializeDBWithColumnFamilies(opts, outputDBPath, inputKVDir)
@@ -212,13 +232,7 @@ func readFromRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb
 }
 
 func (rocksDB RocksDBBackend) BenchmarkDBRead(inputKVDir string, outputDBPath string, concurrency int, maxRetries int, chunkSize int) {
-	opts := grocksdb.NewDefaultOptions()
-	// Configs taken from implementations
-	opts.IncreaseParallelism(runtime.NumCPU())
-	opts.OptimizeLevelStyleCompaction(512 * 1024 * 1024)
-	opts.SetTargetFileSizeMultiplier(2)
-	opts.SetOptimizeFiltersForHits(true)
-	opts.EnableStatistics()
+	opts := NewRocksDBOpts()
 
 	// Initialize db
 	db, cfHandleMap, err := initializeDBWithColumnFamilies(opts, outputDBPath, inputKVDir)
@@ -349,12 +363,7 @@ func forwardIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*gr
 // TODO: Add Random key iteration latency
 func (rocksDB RocksDBBackend) BenchmarkDBForwardIteration(inputKVDir string, outputDBPath string, concurrency int, maxIterationsPerFile int, iterationSteps int) {
 	// Open the DB with default options
-	opts := grocksdb.NewDefaultOptions()
-	opts.IncreaseParallelism(runtime.NumCPU())
-	opts.OptimizeLevelStyleCompaction(512 * 1024 * 1024)
-	opts.SetTargetFileSizeMultiplier(2)
-	opts.SetOptimizeFiltersForHits(true)
-	opts.EnableStatistics()
+	opts := NewRocksDBOpts()
 
 	// Initialize db
 	db, cfHandleMap, err := initializeDBWithColumnFamilies(opts, outputDBPath, inputKVDir)
@@ -477,12 +486,7 @@ func reverseIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*gr
 // TODO: Add Random key iteration latency
 func (rocksDB RocksDBBackend) BenchmarkDBReverseIteration(inputKVDir string, outputDBPath string, concurrency int, maxIterationsPerFile int, iterationSteps int) {
 	// Open the DB with default options
-	opts := grocksdb.NewDefaultOptions()
-	opts.IncreaseParallelism(runtime.NumCPU())
-	opts.OptimizeLevelStyleCompaction(512 * 1024 * 1024)
-	opts.SetTargetFileSizeMultiplier(2)
-	opts.SetOptimizeFiltersForHits(true)
-	opts.EnableStatistics()
+	opts := NewRocksDBOpts()
 
 	// Initialize db
 	db, cfHandleMap, err := initializeDBWithColumnFamilies(opts, outputDBPath, inputKVDir)
