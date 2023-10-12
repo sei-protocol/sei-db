@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"strings"
@@ -190,22 +189,21 @@ func CalculatePercentile(latencies []time.Duration, percentile float64) time.Dur
 	return latencies[index]
 }
 
-// Picks random file from input kv dir and updates processedFiles Map with it
-func PickRandomKVFile(inputKVDir string, processedFiles *sync.Map) string {
-	files, _ := ioutil.ReadDir(inputKVDir)
-	var availableFiles []string
+// Picks random item from a list and updates sync map with it
+func PickRandomItem(items []string, processedItems *sync.Map) string {
+	var availableItems []string
 
-	for _, file := range files {
-		if _, processed := processedFiles.Load(file.Name()); !processed && strings.HasSuffix(file.Name(), ".kv") {
-			availableFiles = append(availableFiles, file.Name())
+	for _, item := range items {
+		if _, processed := processedItems.Load(item); !processed {
+			availableItems = append(availableItems, item)
 		}
 	}
 
-	if len(availableFiles) == 0 {
+	if len(availableItems) == 0 {
 		return ""
 	}
 
-	selected := availableFiles[rand.Intn(len(availableFiles))]
-	processedFiles.Store(selected, true)
+	selected := availableItems[rand.Intn(len(availableItems))]
+	processedItems.Store(selected, true)
 	return selected
 }

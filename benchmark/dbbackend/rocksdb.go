@@ -19,6 +19,11 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency 
 	if err != nil {
 		panic(err)
 	}
+	// Extract file nams from input KV dir
+	var fileNames []string
+	for _, file := range files {
+		fileNames = append(fileNames, file.Name())
+	}
 	latencies := make(chan time.Duration, len(files)*chunkSize)
 
 	wg := &sync.WaitGroup{}
@@ -31,7 +36,7 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency 
 			defer wg.Done()
 			wo := grocksdb.NewDefaultWriteOptions()
 			for {
-				filename := utils.PickRandomKVFile(inputKVDir, processedFiles)
+				filename := utils.PickRandomItem(fileNames, processedFiles)
 				if filename == "" {
 					break
 				}
@@ -118,6 +123,11 @@ func readFromRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency
 	if err != nil {
 		panic(err)
 	}
+	// Extract file nams from input KV dir
+	var fileNames []string
+	for _, file := range files {
+		fileNames = append(fileNames, file.Name())
+	}
 	latencies := make(chan time.Duration, len(files)*chunkSize)
 
 	processedFiles := &sync.Map{}
@@ -130,7 +140,7 @@ func readFromRocksDBConcurrently(db *grocksdb.DB, inputKVDir string, concurrency
 			defer wg.Done()
 			ro := grocksdb.NewDefaultReadOptions()
 			for {
-				filename := utils.PickRandomKVFile(inputKVDir, processedFiles)
+				filename := utils.PickRandomItem(fileNames, processedFiles)
 				if filename == "" {
 					break
 				}
@@ -191,6 +201,89 @@ func (rocksDB RocksDBBackend) BenchmarkDBRead(inputKVDir string, outputDBPath st
 	fmt.Printf("Total Time taken: %v\n", totalTime)
 	fmt.Printf("Throughput: %f reads/sec\n", float64(len(latencies))/totalTime.Seconds())
 	fmt.Printf("Total records read %d\n", len(latencies))
+
+	// Sort latencies for percentile calculations
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+
+	// Calculate average latency
+	var totalLatency time.Duration
+	for _, l := range latencies {
+		totalLatency += l
+	}
+	avgLatency := totalLatency / time.Duration(len(latencies))
+
+	fmt.Printf("Average Latency: %v\n", avgLatency)
+	fmt.Printf("P50 Latency: %v\n", utils.CalculatePercentile(latencies, 50))
+	fmt.Printf("P75 Latency: %v\n", utils.CalculatePercentile(latencies, 75))
+	fmt.Printf("P99 Latency: %v\n", utils.CalculatePercentile(latencies, 99))
+}
+
+func forwardIterateRocksDBConcurrently(db *grocksdb.DB, prefixes []string, concurrency int) []time.Duration {
+	// Store latencies in buffered channel
+	latencies := make(chan time.Duration, len(prefixes))
+
+	processedPrefixes := &sync.Map{}
+	wg := &sync.WaitGroup{}
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ro := grocksdb.NewDefaultReadOptions()
+			for {
+				selectedPrefix := utils.PickRandomItem(prefixes, processedPrefixes)
+				if selectedPrefix == "" {
+					break
+				}
+
+				startTime := time.Now()
+
+				iter := db.NewIterator(ro)
+				defer iter.Close()
+				for iter.Seek([]byte(selectedPrefix)); iter.ValidForPrefix([]byte(selectedPrefix)); iter.Next() {
+					// Do nothing, just iterate.
+				}
+
+				latency := time.Since(startTime)
+				latencies <- latency
+			}
+		}()
+	}
+	wg.Wait()
+	close(latencies)
+
+	var latencySlice []time.Duration
+	for l := range latencies {
+		latencySlice = append(latencySlice, l)
+	}
+	return latencySlice
+}
+
+func (rocksDB RocksDBBackend) BenchmarkDBForwardIteration(prefixes []string, outputDBPath string, concurrency int) {
+	// Open the DB with default options
+	opts := grocksdb.NewDefaultOptions()
+	opts.IncreaseParallelism(runtime.NumCPU())
+	opts.OptimizeLevelStyleCompaction(512 * 1024 * 1024)
+	opts.SetTargetFileSizeMultiplier(2)
+	opts.SetOptimizeFiltersForHits(true)
+
+	db, err := grocksdb.OpenDb(opts, outputDBPath)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to open the DB: %v", err))
+	}
+	defer db.Close()
+
+	startTime := time.Now()
+	latencies := forwardIterateRocksDBConcurrently(db, prefixes, concurrency)
+	endTime := time.Now()
+
+	totalTime := endTime.Sub(startTime)
+
+	// Log throughput
+	totalIterations := len(prefixes)
+	fmt.Printf("Total Prefixes Iterated: %d\n", totalIterations)
+	fmt.Printf("Total Time taken: %v\n", totalTime)
+	fmt.Printf("Throughput: %f iterations/sec\n", float64(totalIterations)/totalTime.Seconds())
 
 	// Sort latencies for percentile calculations
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
