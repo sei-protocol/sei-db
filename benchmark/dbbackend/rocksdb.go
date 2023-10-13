@@ -52,8 +52,8 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb.
 	var allLatencies []time.Duration
 
 	for _, versionDir := range versionDirs {
-		versionPath := filepath.Join(inputDir, versionDir.Name())
 		fmt.Printf("Current Version: %+v\n", versionDir.Name())
+		versionPath := filepath.Join(inputDir, versionDir.Name())
 		allFiles, err := utils.ListAllFiles(versionPath)
 		if err != nil {
 			panic(err)
@@ -79,13 +79,16 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb.
 
 					// Retrieve column family for the version
 					// TODO: Refactor to helper
-					version := filepath.Base(filepath.Dir(filename))
+					version := versionDir.Name()
 					cf, exists := cfHandles[version]
 					if !exists {
-						panic(fmt.Sprintf("No handle found for version: %s", version))
+						panic(fmt.Sprintf("No handle found for version: %s\n", version))
 					}
 
-					kvEntries, _ := utils.ReadKVEntriesFromFile(filename)
+					kvEntries, err := utils.ReadKVEntriesFromFile(filepath.Join(versionPath, filename))
+					if err != nil {
+						panic(err)
+					}
 					utils.RandomShuffle(kvEntries)
 
 					// TODO: Randomly select any key and write vs iterating through single file each time
@@ -190,6 +193,7 @@ func readFromRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb
 			defer ro.Destroy()
 
 			for atomic.LoadInt64(&opCounter) < maxOps {
+				// TODO: Refactor below into helper
 				// Randomly select version
 				versionDir := versionDirs[rand.Intn(len(versionDirs))]
 				versionPath := filepath.Join(inputDir, versionDir.Name())
@@ -316,6 +320,7 @@ func forwardIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*gr
 			defer ro.Destroy()
 
 			for atomic.LoadInt64(&opCounter) < maxOps {
+				// TODO: Refactor below into helper
 				// Randomly select version
 				versionDir := versionDirs[rand.Intn(len(versionDirs))]
 				versionPath := filepath.Join(inputDir, versionDir.Name())
@@ -443,6 +448,7 @@ func reverseIterateRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*gr
 			defer ro.Destroy()
 
 			for atomic.LoadInt64(&opCounter) < maxOps {
+				// TODO: Refactor below into helper
 				// Randomly select version
 				versionDir := versionDirs[rand.Intn(len(versionDirs))]
 				versionPath := filepath.Join(inputDir, versionDir.Name())
