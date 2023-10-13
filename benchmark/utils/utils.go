@@ -241,7 +241,7 @@ func ListAllFiles(dir string) ([]string, error) {
 	// Extract file nams from input KV dir
 	var fileNames []string
 	for _, file := range files {
-		fileNames = append(fileNames, file.Name())
+		fileNames = append(fileNames, filepath.Join(dir, file.Name()))
 	}
 
 	return fileNames, nil

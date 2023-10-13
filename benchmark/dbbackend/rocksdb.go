@@ -3,7 +3,6 @@ package dbbackend
 import (
 	"fmt"
 	"io/ioutil"
-	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -48,11 +47,8 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb.
 	var allLatencies []time.Duration
 
 	for _, versionDir := range versionDirs {
-		if !versionDir.IsDir() {
-			continue
-		}
-
 		versionPath := filepath.Join(inputDir, versionDir.Name())
+		fmt.Printf("Current Version: %+v\n", versionDir.Name())
 		allFiles, err := utils.ListAllFiles(versionPath)
 		if err != nil {
 			panic(err)
@@ -77,6 +73,7 @@ func writeToRocksDBConcurrently(db *grocksdb.DB, cfHandles map[string]*grocksdb.
 					}
 
 					// Retrieve column family for the version
+					// TODO: Refactor to helper
 					version := filepath.Base(filepath.Dir(filename))
 					cf, exists := cfHandles[version]
 					if !exists {
@@ -517,25 +514,14 @@ func (rocksDB RocksDBBackend) BenchmarkDBReverseIteration(inputKVDir string, out
 
 // Helper to Open DB with all column families
 func initializeDBWithColumnFamilies(opts *grocksdb.Options, outputDBPath string, inputKVDir string) (*grocksdb.DB, map[string]*grocksdb.ColumnFamilyHandle, error) {
-	// List existing column families
-	existingCFs, err := grocksdb.ListColumnFamilies(opts, outputDBPath)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, nil, err
-	}
-
 	versionDirs, err := ioutil.ReadDir(inputKVDir)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	allCFs := map[string]bool{"default": true} // Default CF should always exist
-	for _, name := range existingCFs {
-		allCFs[name] = true
-	}
 	for _, versionDir := range versionDirs {
-		if versionDir.IsDir() {
-			allCFs[versionDir.Name()] = true
-		}
+		allCFs[versionDir.Name()] = true
 	}
 
 	cfNames := make([]string, 0, len(allCFs))
@@ -543,7 +529,12 @@ func initializeDBWithColumnFamilies(opts *grocksdb.Options, outputDBPath string,
 		cfNames = append(cfNames, name)
 	}
 
-	db, cfHandles, err := grocksdb.OpenDbColumnFamilies(opts, outputDBPath, cfNames, make([]*grocksdb.Options, len(cfNames)))
+	cfOptions := make([]*grocksdb.Options, len(cfNames))
+	for i := range cfNames {
+		cfOptions[i] = NewRocksDBOpts()
+	}
+
+	db, cfHandles, err := grocksdb.OpenDbColumnFamilies(opts, outputDBPath, cfNames, cfOptions)
 	if err != nil {
 		return nil, nil, err
 	}
