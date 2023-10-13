@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"io/fs"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -211,47 +210,26 @@ func PickRandomItem(items []string, processedItems *sync.Map) string {
 	return selected
 }
 
-func CopyDir(src string, dest string) error {
-	entries, err := ioutil.ReadDir(src)
-	if err != nil {
-		return err
+// CreateVersions creates symlink versions of the base directory.
+func CreateVersions(baseOutputDir, outputDir string, numOutputVersions int) error {
+	// Ensure the base directory exists
+	if _, err := os.Stat(baseOutputDir); os.IsNotExist(err) {
+		return fmt.Errorf("base output directory does not exist: %s", baseOutputDir)
 	}
 
-	err = os.MkdirAll(dest, fs.ModePerm)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		destPath := filepath.Join(dest, entry.Name())
-
-		if entry.IsDir() {
-			err = CopyDir(srcPath, destPath)
-			if err != nil {
-				return err
-			}
-		} else {
-			err = CopyFile(srcPath, destPath)
-			if err != nil {
-				return err
-			}
+	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(outputDir, os.ModePerm); err != nil {
+			return fmt.Errorf("cannot create output directory: %s", err)
 		}
 	}
-	return nil
-}
 
-func CopyFile(src string, dest string) error {
-	input, err := ioutil.ReadFile(src)
-	if err != nil {
-		return err
+	// Create symlinks for the specified number of versions
+	for i := 1; i < numOutputVersions; i++ {
+		destDir := filepath.Join(outputDir, fmt.Sprintf("version_%d", i))
+		if err := os.Symlink(baseOutputDir, destDir); err != nil {
+			return fmt.Errorf("error creating symlink: %s", err)
+		}
 	}
-
-	err = ioutil.WriteFile(dest, input, fs.ModePerm)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 

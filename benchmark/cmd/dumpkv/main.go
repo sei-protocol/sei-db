@@ -246,15 +246,11 @@ func GenerateData(dbDir string, modules []string, outputDir string, version int,
 		utils.WriteTreeDataToFile(tree, outputFileNamePattern, chunkSize)
 	}
 
-	// Copy the base directory to the desired number of versions
-	for i := 1; i < numOutputVersions; i++ {
-		srcDir := baseOutputDir
-		destDir := filepath.Join(outputDir, fmt.Sprintf("version_%d", i))
-		err := utils.CopyDir(srcDir, destDir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error copying directory: %s\n", err)
-			return
-		}
+	// Symlink versions of the base dir
+	err = utils.CreateVersions(baseOutputDir, outputDir, numOutputVersions)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating versions: %s\n", err)
+		return
 	}
 }
 
