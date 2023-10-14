@@ -110,7 +110,7 @@ func init() {
 	benchmarkReverseIterationCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory which contains db")
 	benchmarkReverseIterationCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while reading from db")
 	benchmarkReverseIterationCmd.Flags().IntVar(&iterationSteps, "iteration-steps", 10, "Number of steps to run per iteration")
-	benchmarkForwardIterationCmd.Flags().IntVar(&numVersions, "num-versions", 1, "number of versions in db")
+	benchmarkReverseIterationCmd.Flags().IntVar(&numVersions, "num-versions", 1, "number of versions in db")
 }
 
 func main() {
