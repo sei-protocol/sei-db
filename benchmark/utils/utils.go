@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -245,4 +246,52 @@ func ListAllFiles(dir string) ([]string, error) {
 	}
 
 	return fileNames, nil
+}
+
+func LoadAndShuffleKV(inputDir string) ([]KeyValuePair, error) {
+	var allKVs []KeyValuePair
+	mu := &sync.Mutex{}
+	wg := &sync.WaitGroup{}
+
+	allFiles, err := ListAllFiles(inputDir)
+	if err != nil {
+		log.Fatalf("Failed to list all files: %v", err)
+	}
+
+	for _, file := range allFiles {
+		wg.Add(1)
+		go func(id string, selectedFile string) {
+			defer wg.Done()
+
+			kvEntries, err := ReadKVEntriesFromFile(filepath.Join(id, selectedFile))
+			if err != nil {
+				panic(err)
+			}
+
+			// Safely append the kvEntries to allKVs
+			mu.Lock()
+			allKVs = append(allKVs, kvEntries...)
+			mu.Unlock()
+		}(inputDir, file)
+	}
+	wg.Wait()
+
+	rand.Shuffle(len(allKVs), func(i, j int) {
+		allKVs[i], allKVs[j] = allKVs[j], allKVs[i]
+	})
+
+	return allKVs, nil
+}
+
+func GenerateVersionNames(numVersions int) []string {
+	if numVersions <= 0 {
+		panic("Number of versions must be larger than 0")
+	}
+
+	names := []string{}
+	for i := 0; i < numVersions; i++ {
+		names = append(names, fmt.Sprintf("version_%d", i))
+	}
+
+	return names
 }
