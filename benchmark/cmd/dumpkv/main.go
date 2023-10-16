@@ -9,11 +9,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/sei-protocol/sei-db/benchmark/dbbackend"
+	"github.com/sei-protocol/sei-db/benchmark/dbbackend/rocksdb"
+	"github.com/sei-protocol/sei-db/benchmark/dbbackend/sqlite"
 	"github.com/sei-protocol/sei-db/benchmark/utils"
 )
 
 const rocksDBBackend = "rocksDB"
+const sqliteBackend = "sqlite"
 
 var (
 	levelDBDir     string
@@ -34,6 +36,7 @@ var (
 	}
 	validDBBackends = map[string]bool{
 		rocksDBBackend: true,
+		sqliteBackend:  true,
 	}
 
 	rootCmd = &cobra.Command{
@@ -260,7 +263,12 @@ func BenchmarkWrite(inputKVDir string, numVersions int, outputDir string, dbBack
 	fmt.Printf("Reading Raw Keys and Values from %s\n", inputKVDir)
 
 	if dbBackend == rocksDBBackend {
-		backend := dbbackend.RocksDBBackend{}
+		backend := rocksdb.RocksDBBackend{}
+		backend.BenchmarkDBWrite(inputKVDir, numVersions, outputDir, concurrency, chunkSize, batchSize)
+	}
+
+	if dbBackend == sqliteBackend {
+		backend := sqlite.SqliteBackend{}
 		backend.BenchmarkDBWrite(inputKVDir, numVersions, outputDir, concurrency, chunkSize, batchSize)
 	}
 
@@ -278,7 +286,12 @@ func BenchmarkRead(inputKVDir string, numVersions int, outputDir string, dbBacke
 	fmt.Printf("Reading Raw Keys and Values from %s\n", inputKVDir)
 
 	if dbBackend == rocksDBBackend {
-		backend := dbbackend.RocksDBBackend{}
+		backend := rocksdb.RocksDBBackend{}
+		backend.BenchmarkDBRead(inputKVDir, numVersions, outputDir, concurrency, chunkSize, maxOps)
+	}
+
+	if dbBackend == sqliteBackend {
+		backend := sqlite.SqliteBackend{}
 		backend.BenchmarkDBRead(inputKVDir, numVersions, outputDir, concurrency, chunkSize, maxOps)
 	}
 
@@ -291,7 +304,12 @@ func BenchmarkDBIteration(inputKVDir string, numVersions int, outputDir string, 
 	fmt.Printf("Iterating Over DB at  %s\n", outputDir)
 
 	if dbBackend == rocksDBBackend {
-		backend := dbbackend.RocksDBBackend{}
+		backend := rocksdb.RocksDBBackend{}
+		backend.BenchmarkDBForwardIteration(inputKVDir, numVersions, outputDir, concurrency, maxOps, iterationSteps)
+	}
+
+	if dbBackend == sqliteBackend {
+		backend := sqlite.SqliteBackend{}
 		backend.BenchmarkDBForwardIteration(inputKVDir, numVersions, outputDir, concurrency, maxOps, iterationSteps)
 	}
 
@@ -304,7 +322,12 @@ func BenchmarkDBReverseIteration(inputKVDir string, numVersions int, outputDir s
 	fmt.Printf("Iterating Over DB at  %s\n", outputDir)
 
 	if dbBackend == rocksDBBackend {
-		backend := dbbackend.RocksDBBackend{}
+		backend := rocksdb.RocksDBBackend{}
+		backend.BenchmarkDBReverseIteration(inputKVDir, numVersions, outputDir, concurrency, maxOps, iterationSteps)
+	}
+
+	if dbBackend == sqliteBackend {
+		backend := sqlite.SqliteBackend{}
 		backend.BenchmarkDBReverseIteration(inputKVDir, numVersions, outputDir, concurrency, maxOps, iterationSteps)
 	}
 

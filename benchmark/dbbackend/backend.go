@@ -6,5 +6,3 @@ type DBBackend interface {
 	BenchmarkDBForwardIteration(inputKVDir string, numVersions int, outputDBPath string, concurrency int, maxOps int64, iterationSteps int)
 	BenchmarkDBReverseIteration(inputKVDir string, numVersions int, outputDBPath string, concurrency int, maxOps int64, iterationSteps int)
 }
-
-type RocksDBBackend struct{}

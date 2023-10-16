@@ -271,6 +271,7 @@ func LoadAndShuffleKV(inputDir string) ([]KeyValuePair, error) {
 			// Safely append the kvEntries to allKVs
 			mu.Lock()
 			allKVs = append(allKVs, kvEntries...)
+			fmt.Printf("Done processing file %+v\n", filepath.Join(id, selectedFile))
 			mu.Unlock()
 		}(inputDir, file)
 	}
