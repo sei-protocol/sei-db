@@ -22,13 +22,13 @@ const (
 
 	latestVersionStmt = `
 	INSERT INTO state_storage(key, value, version)
-    VALUES(?, ?, ?, ?)
+    VALUES(?, ?, ?)
   ON CONFLICT(key, version) DO UPDATE SET
     value = ?;
 	`
 	upsertStmt = `
 	INSERT INTO state_storage(key, value, version)
-    VALUES(?, ?, ?, ?)
+    VALUES(?, ?, ?)
   ON CONFLICT(key, version) DO UPDATE SET
     value = ?;
 	`

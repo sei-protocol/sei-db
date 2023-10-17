@@ -2,8 +2,6 @@ GOTOOLS := github.com/golangci/golangci-lint/cmd/golangci-lint
 VERSION := $(shell echo $(shell git describe --tags) | sed 's/^v//')
 COMMIT := $(shell git log -1 --format='%H')
 BRANCH=$(shell git rev-parse --abbrev-ref HEAD)
-DOCKER_BUF := docker run -v $(shell pwd):/workspace --workdir /workspace bufbuild/buf
-DOCKER := $(shell which docker)
 HTTPS_GIT := https://github.com/cosmos/iavl.git
 UNAME_S := $(shell uname -s)
 
