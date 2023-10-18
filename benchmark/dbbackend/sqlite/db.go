@@ -11,6 +11,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// NOTE: Adapted from cosmos-sdk store-v2
+// Please reference https://github.com/cosmos/cosmos-sdk/tree/main/store/storage
+
 type batchAction int
 
 const (
@@ -41,8 +44,6 @@ const (
 )
 
 type SqliteBackend struct{}
-
-// NOTE: Adapted from cosmos-sdk store-v2
 
 type Database struct {
 	storage *sql.DB

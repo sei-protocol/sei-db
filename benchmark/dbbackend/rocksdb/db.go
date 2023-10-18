@@ -10,6 +10,9 @@ import (
 	"golang.org/x/exp/slices"
 )
 
+// NOTE: Adapted from cosmos-sdk store-v2
+// Please reference https://github.com/cosmos/cosmos-sdk/tree/main/store/storage
+
 const (
 	CFNameStateStorage = "state_storage"
 	CFNameDefault      = "default"
@@ -23,8 +26,6 @@ var (
 )
 
 type RocksDBBackend struct{}
-
-// NOTE: Adapted from cosmos-sdk store-v2
 
 type Database struct {
 	storage  *grocksdb.DB

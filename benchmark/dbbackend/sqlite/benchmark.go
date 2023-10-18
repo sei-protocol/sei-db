@@ -12,6 +12,10 @@ import (
 	"github.com/sei-protocol/sei-db/benchmark/utils"
 )
 
+// writeToSqliteConcurrently generates random write load against the sqlite db
+// Given kv pairs (randomly shuffled), the version, batch size, it will spin up `concurrency` goroutines
+// each of which is assigned to a portion of the kv data and writes to db in `batchSize` batches.
+// It maintains a `latencies` channel which aggregates all the latencies
 func writeToSqliteConcurrently(db *Database, allKVs []utils.KeyValuePair, concurrency int, version uint64, batchSize int) []time.Duration {
 	var allLatencies []time.Duration
 	latencies := make(chan time.Duration, len(allKVs))
@@ -72,7 +76,9 @@ func writeToSqliteConcurrently(db *Database, allKVs []utils.KeyValuePair, concur
 	return allLatencies
 }
 
-func (sqliteDB SqliteBackend) BenchmarkDBWrite(inputKVDir string, numVersions int, outputDBPath string, concurrency int, chunkSize int, batchSize int) {
+// BenchmarkDBWrite measures random write performance of sqlite db
+// Given an input dir containing all the raw kv data, it writes to sqlite one version after another
+func (sqliteDB SqliteBackend) BenchmarkDBWrite(inputKVDir string, numVersions int, outputDBPath string, concurrency int, batchSize int) {
 	db, err := New(outputDBPath)
 	if err != nil {
 		panic(err)
@@ -92,7 +98,7 @@ func (sqliteDB SqliteBackend) BenchmarkDBWrite(inputKVDir string, numVersions in
 	writeCount := 0
 	v := uint64(0)
 	for ; v < uint64(numVersions); v++ {
-		// Write shuffled entries to RocksDB concurrently
+		// Write shuffled entries to sqlitedb concurrently
 		fmt.Printf("On Version %+v\n", v)
 		totalLatencies := []time.Duration{}
 		startTime := time.Now()
@@ -119,6 +125,10 @@ func (sqliteDB SqliteBackend) BenchmarkDBWrite(inputKVDir string, numVersions in
 	fmt.Printf("Total records written %d\n", writeCount)
 }
 
+// readFromSqliteDBConcurrently generates random read load against the sqlite db
+// Given kv pairs (randomly shuffled), numVersions, it will spin up `concurrency` goroutines
+// that randomly select a version, key and query the db.
+// It only performs `maxOps“ random reads and maintains a `latencies` channel which aggregates all the latencies.
 func readFromSqliteDBConcurrently(db *Database, allKVs []utils.KeyValuePair, numVersions int, concurrency int, maxOps int64) []time.Duration {
 	var allLatencies []time.Duration
 	latencies := make(chan time.Duration, maxOps)
@@ -165,7 +175,9 @@ func readFromSqliteDBConcurrently(db *Database, allKVs []utils.KeyValuePair, num
 	return allLatencies
 }
 
-func (sqliteDB SqliteBackend) BenchmarkDBRead(inputKVDir string, numVersions int, outputDBPath string, concurrency int, chunkSize int, maxOps int64) {
+// BenchmarkDBRead measures random read performance of sqlite db
+// Given an input dir containing all the raw kv data, it generates random read load and measures performance.
+func (sqliteDB SqliteBackend) BenchmarkDBRead(inputKVDir string, numVersions int, outputDBPath string, concurrency int, maxOps int64) {
 	kvData, err := utils.LoadAndShuffleKV(inputKVDir)
 	if err != nil {
 		panic(err)
@@ -206,6 +218,10 @@ func (sqliteDB SqliteBackend) BenchmarkDBRead(inputKVDir string, numVersions int
 	fmt.Printf("P99 Latency: %v\n", utils.CalculatePercentile(latencies, 99))
 }
 
+// forwardIterateSqliteDBConcurrently generates forward iteration load against the sqlite db
+// Given kv pairs (randomly shuffled), numVersions, it will spin up `concurrency` goroutines
+// that randomly select a version, key, seeks to that key and starts a forward iteration for at most `numIterationSteps` steps.
+// It only performs `maxOps“ forward iterations and maintains a `latencies` channel which aggregates all the latencies.
 func forwardIterateSqliteDBConcurrently(db *Database, allKVs []utils.KeyValuePair, numVersions int, concurrency int, numIterationSteps int, maxOps int64) ([]time.Duration, int) {
 	var allLatencies []time.Duration
 	var totalSteps int
@@ -265,6 +281,8 @@ func forwardIterateSqliteDBConcurrently(db *Database, allKVs []utils.KeyValuePai
 	return allLatencies, totalSteps
 }
 
+// BenchmarkDBForwardIteration measures forward iteration performance of sqlite db
+// Given an input dir containing all the raw kv data, it selects a random key, forward iterates and measures performance.
 func (sqliteDB SqliteBackend) BenchmarkDBForwardIteration(inputKVDir string, numVersions int, outputDBPath string, concurrency int, maxOps int64, iterationSteps int) {
 	kvData, err := utils.LoadAndShuffleKV(inputKVDir)
 	if err != nil {
@@ -298,7 +316,11 @@ func (sqliteDB SqliteBackend) BenchmarkDBForwardIteration(inputKVDir string, num
 	fmt.Printf("Average Per-Key Latency: %v\n", avgLatency)
 }
 
-func reverseIterateRocksDBConcurrently(db *Database, allKVs []utils.KeyValuePair, numVersions int, concurrency int, numIterationSteps int, maxOps int64) ([]time.Duration, int) {
+// reverseIterateSqliteDBConcurrently generates reverse iteration load against the sqlite db
+// Given kv pairs (randomly shuffled), numVersions, it will spin up `concurrency` goroutines
+// that randomly select a version, key, seeks to that key and starts a reverse iteration for at most `numIterationSteps` steps.
+// It only performs `maxOps“ reverse iterations and maintains a `latencies` channel which aggregates all the latencies.
+func reverseIterateSqliteDBConcurrently(db *Database, allKVs []utils.KeyValuePair, numVersions int, concurrency int, numIterationSteps int, maxOps int64) ([]time.Duration, int) {
 	var allLatencies []time.Duration
 	var totalSteps int
 	latencies := make(chan time.Duration, maxOps)
@@ -358,6 +380,8 @@ func reverseIterateRocksDBConcurrently(db *Database, allKVs []utils.KeyValuePair
 	return allLatencies, totalSteps
 }
 
+// BenchmarkDBReverseIteration measures reverse iteration performance of sqlite db
+// Given an input dir containing all the raw kv data, it selects a random key, reverse iterates and measures performance.
 func (sqliteDB SqliteBackend) BenchmarkDBReverseIteration(inputKVDir string, numVersions int, outputDBPath string, concurrency int, maxOps int64, iterationSteps int) {
 	kvData, err := utils.LoadAndShuffleKV(inputKVDir)
 	if err != nil {
@@ -372,7 +396,7 @@ func (sqliteDB SqliteBackend) BenchmarkDBReverseIteration(inputKVDir string, num
 	defer db.Close()
 
 	startTime := time.Now()
-	latencies, totalCountIteration := reverseIterateRocksDBConcurrently(db, kvData, numVersions, concurrency, iterationSteps, maxOps)
+	latencies, totalCountIteration := reverseIterateSqliteDBConcurrently(db, kvData, numVersions, concurrency, iterationSteps, maxOps)
 	endTime := time.Now()
 
 	totalTime := endTime.Sub(startTime)

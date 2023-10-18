@@ -82,13 +82,11 @@ func init() {
 	generateCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory")
 	generateCmd.Flags().StringVar(&modules, "modules", "", "Comma separated modules to export")
 	generateCmd.Flags().IntVar(&version, "version", 0, "db version")
-	generateCmd.Flags().IntVar(&chunkSize, "chunk-size", 100, "chunk size for each kv file")
 
 	benchmarkWriteCmd.Flags().StringVar(&dbBackend, "db-backend", "", "DB Backend")
 	benchmarkWriteCmd.Flags().StringVar(&rawKVInputDir, "raw-kv-input-dir", "", "Input Directory for benchmark which contains the raw kv data")
 	benchmarkWriteCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory")
 	benchmarkWriteCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while writing to db")
-	benchmarkWriteCmd.Flags().IntVar(&chunkSize, "chunk-size", 100, "chunk size for each kv file")
 	benchmarkWriteCmd.Flags().IntVar(&batchSize, "batch-size", 1, "batch size for db writes")
 	benchmarkWriteCmd.Flags().IntVar(&numVersions, "num-versions", 1, "number of versions in db")
 
@@ -96,7 +94,6 @@ func init() {
 	benchmarkReadCmd.Flags().StringVar(&rawKVInputDir, "raw-kv-input-dir", "", "Input Directory for benchmark which contains the raw kv data")
 	benchmarkReadCmd.Flags().StringVar(&outputDir, "output-dir", "", "Output Directory which contains db")
 	benchmarkReadCmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency while reading from db")
-	benchmarkReadCmd.Flags().IntVar(&chunkSize, "chunk-size", 100, "chunk size for each kv file")
 	benchmarkReadCmd.Flags().Int64Var(&maxOps, "max-operations", 1000, "Max operations to run")
 	benchmarkReadCmd.Flags().IntVar(&numVersions, "num-versions", 1, "number of versions in db")
 
@@ -151,7 +148,7 @@ func benchmarkWrite(cmd *cobra.Command, args []string) {
 		panic(fmt.Sprintf("Unsupported db backend: %s\n", dbBackend))
 	}
 
-	BenchmarkWrite(rawKVInputDir, numVersions, outputDir, dbBackend, concurrency, chunkSize, batchSize)
+	BenchmarkWrite(rawKVInputDir, numVersions, outputDir, dbBackend, concurrency, batchSize)
 }
 
 func benchmarkRead(cmd *cobra.Command, args []string) {
@@ -172,7 +169,7 @@ func benchmarkRead(cmd *cobra.Command, args []string) {
 		panic(fmt.Sprintf("Unsupported db backend: %s\n", dbBackend))
 	}
 
-	BenchmarkRead(rawKVInputDir, numVersions, outputDir, dbBackend, concurrency, chunkSize, maxOps)
+	BenchmarkRead(rawKVInputDir, numVersions, outputDir, dbBackend, concurrency, maxOps)
 }
 
 func benchmarkForwardIteration(cmd *cobra.Command, args []string) {
@@ -253,7 +250,7 @@ func GenerateData(dbDir string, modules []string, outputDir string, version int,
 }
 
 // Benchmark write latencies and throughput of db backend
-func BenchmarkWrite(inputKVDir string, numVersions int, outputDir string, dbBackend string, concurrency int, chunkSize int, batchSize int) {
+func BenchmarkWrite(inputKVDir string, numVersions int, outputDir string, dbBackend string, concurrency int, batchSize int) {
 	// Create output directory
 	err := os.MkdirAll(outputDir, fs.ModePerm)
 	if err != nil {
@@ -264,19 +261,19 @@ func BenchmarkWrite(inputKVDir string, numVersions int, outputDir string, dbBack
 
 	if dbBackend == rocksDBBackend {
 		backend := rocksdb.RocksDBBackend{}
-		backend.BenchmarkDBWrite(inputKVDir, numVersions, outputDir, concurrency, chunkSize, batchSize)
+		backend.BenchmarkDBWrite(inputKVDir, numVersions, outputDir, concurrency, batchSize)
 	}
 
 	if dbBackend == sqliteBackend {
 		backend := sqlite.SqliteBackend{}
-		backend.BenchmarkDBWrite(inputKVDir, numVersions, outputDir, concurrency, chunkSize, batchSize)
+		backend.BenchmarkDBWrite(inputKVDir, numVersions, outputDir, concurrency, batchSize)
 	}
 
 	return
 }
 
 // Benchmark read latencies and throughput of db backend
-func BenchmarkRead(inputKVDir string, numVersions int, outputDir string, dbBackend string, concurrency int, chunkSize int, maxOps int64) {
+func BenchmarkRead(inputKVDir string, numVersions int, outputDir string, dbBackend string, concurrency int, maxOps int64) {
 	// Create output directory
 	err := os.MkdirAll(outputDir, fs.ModePerm)
 	if err != nil {
@@ -287,12 +284,12 @@ func BenchmarkRead(inputKVDir string, numVersions int, outputDir string, dbBacke
 
 	if dbBackend == rocksDBBackend {
 		backend := rocksdb.RocksDBBackend{}
-		backend.BenchmarkDBRead(inputKVDir, numVersions, outputDir, concurrency, chunkSize, maxOps)
+		backend.BenchmarkDBRead(inputKVDir, numVersions, outputDir, concurrency, maxOps)
 	}
 
 	if dbBackend == sqliteBackend {
 		backend := sqlite.SqliteBackend{}
-		backend.BenchmarkDBRead(inputKVDir, numVersions, outputDir, concurrency, chunkSize, maxOps)
+		backend.BenchmarkDBRead(inputKVDir, numVersions, outputDir, concurrency, maxOps)
 	}
 
 	return
