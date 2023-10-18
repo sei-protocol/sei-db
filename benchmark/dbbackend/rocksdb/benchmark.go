@@ -93,9 +93,7 @@ func (rocksDB RocksDBBackend) BenchmarkDBWrite(inputKVDir string, numVersions in
 		fmt.Printf("On Version %+v\n", v)
 		totalLatencies := []time.Duration{}
 		startTime := time.Now()
-		fmt.Printf("writing concurrenctly\n")
 		latencies := writeToRocksDBConcurrently(db, kvData, concurrency, v, batchSize)
-		fmt.Printf("done writing concurrently\n")
 		endTime := time.Now()
 		totalTime = totalTime + endTime.Sub(startTime)
 		totalLatencies = append(totalLatencies, latencies...)
@@ -143,9 +141,10 @@ func readFromRocksDBConcurrently(db *Database, allKVs []utils.KeyValuePair, numV
 				kv := allKVs[rand.Intn(len(allKVs))]
 
 				startTime := time.Now()
-				_, err := db.Get(version, kv.Key)
+				result, err := db.Get(version, kv.Key)
 				latency := time.Since(startTime)
 				if err == nil {
+					fmt.Printf("return result %\n", result)
 					latencies <- latency
 				} else {
 					panic(err)

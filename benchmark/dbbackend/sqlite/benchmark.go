@@ -96,9 +96,7 @@ func (sqliteDB SqliteBackend) BenchmarkDBWrite(inputKVDir string, numVersions in
 		fmt.Printf("On Version %+v\n", v)
 		totalLatencies := []time.Duration{}
 		startTime := time.Now()
-		fmt.Printf("writing concurrenctly\n")
 		latencies := writeToSqliteConcurrently(db, kvData, concurrency, v, batchSize)
-		fmt.Printf("done writing concurrently\n")
 		endTime := time.Now()
 		totalTime = totalTime + endTime.Sub(startTime)
 		totalLatencies = append(totalLatencies, latencies...)
