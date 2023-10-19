@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/sei-protocol/sei-db/benchmark/dbbackend/pebbledb"
 	"github.com/sei-protocol/sei-db/benchmark/dbbackend/rocksdb"
 	"github.com/sei-protocol/sei-db/benchmark/dbbackend/sqlite"
 	"github.com/sei-protocol/sei-db/benchmark/utils"
@@ -16,6 +17,7 @@ import (
 
 const rocksDBBackend = "rocksDB"
 const sqliteBackend = "sqlite"
+const pebbleDBBackend = "pebbleDB"
 
 var (
 	levelDBDir     string
@@ -35,8 +37,9 @@ var (
 		"dex", "wasm", "accesscontrol", "oracle", "epoch", "mint", "acc", "bank", "crisis", "feegrant", "staking", "distribution", "slashing", "gov", "params", "ibc", "upgrade", "evidence", "transfer", "tokenfactory",
 	}
 	validDBBackends = map[string]bool{
-		rocksDBBackend: true,
-		sqliteBackend:  true,
+		rocksDBBackend:  true,
+		sqliteBackend:   true,
+		pebbleDBBackend: true,
 	}
 
 	rootCmd = &cobra.Command{
@@ -211,6 +214,11 @@ func benchmarkReverseIteration(cmd *cobra.Command, args []string) {
 		panic(fmt.Sprintf("Unsupported db backend: %s\n", dbBackend))
 	}
 
+	// Reverse iteration temporarily not supported for pebbleDB
+	if dbBackend == pebbleDBBackend {
+		panic("Pebble db does not currently support reverse iteration")
+	}
+
 	BenchmarkDBReverseIteration(rawKVInputDir, numVersions, outputDir, dbBackend, concurrency, maxOps, iterationSteps)
 }
 
@@ -269,6 +277,11 @@ func BenchmarkWrite(inputKVDir string, numVersions int, outputDir string, dbBack
 		backend.BenchmarkDBWrite(inputKVDir, numVersions, outputDir, concurrency, batchSize)
 	}
 
+	if dbBackend == pebbleDBBackend {
+		backend := pebbledb.PebbleDBBackend{}
+		backend.BenchmarkDBWrite(inputKVDir, numVersions, outputDir, concurrency, batchSize)
+	}
+
 	return
 }
 
@@ -292,6 +305,11 @@ func BenchmarkRead(inputKVDir string, numVersions int, outputDir string, dbBacke
 		backend.BenchmarkDBRead(inputKVDir, numVersions, outputDir, concurrency, maxOps)
 	}
 
+	if dbBackend == pebbleDBBackend {
+		backend := pebbledb.PebbleDBBackend{}
+		backend.BenchmarkDBRead(inputKVDir, numVersions, outputDir, concurrency, maxOps)
+	}
+
 	return
 }
 
@@ -307,6 +325,11 @@ func BenchmarkDBIteration(inputKVDir string, numVersions int, outputDir string, 
 
 	if dbBackend == sqliteBackend {
 		backend := sqlite.SqliteBackend{}
+		backend.BenchmarkDBForwardIteration(inputKVDir, numVersions, outputDir, concurrency, maxOps, iterationSteps)
+	}
+
+	if dbBackend == pebbleDBBackend {
+		backend := pebbledb.PebbleDBBackend{}
 		backend.BenchmarkDBForwardIteration(inputKVDir, numVersions, outputDir, concurrency, maxOps, iterationSteps)
 	}
 
