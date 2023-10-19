@@ -248,7 +248,7 @@ func forwardIteratePebbleDBConcurrently(db *Database, allKVs []utils.KeyValuePai
 				// Randomly pick a key-value pair to seek to
 				kv := allKVs[rand.Intn(len(allKVs))]
 
-				lowerBound := MVCCEncode(kv.Key, 0)
+				lowerBound := kv.Key
 				itr, err := db.storage.NewIter(&pebble.IterOptions{LowerBound: lowerBound})
 				if err != nil {
 					panic(err)
