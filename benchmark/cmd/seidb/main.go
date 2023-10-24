@@ -7,10 +7,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
+const RocksDBBackend = "rocksDB"
 
-	// TODO: Will include rocksdb, pebbledb and sqlite in future PR's
-	ValidDBBackends = map[string]bool{}
+var (
+	ValidDBBackends = map[string]bool{
+		RocksDBBackend: true,
+	}
 )
 
 func main() {
