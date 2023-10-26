@@ -1,6 +1,3 @@
-//go:build rocksdbBackend
-// +build rocksdbBackend
-
 package main
 
 import (
@@ -49,11 +46,6 @@ func benchmarkForwardIteration(cmd *cobra.Command, args []string) {
 		panic("Must provide output dir")
 	}
 
-	_, isAcceptedBackend := ValidDBBackends[dbBackend]
-	if !isAcceptedBackend {
-		panic(fmt.Sprintf("Unsupported db backend: %s\n", dbBackend))
-	}
-
 	BenchmarkDBIteration(rawKVInputDir, numVersions, outputDir, dbBackend, concurrency, maxOps, iterationSteps)
 }
 
@@ -62,10 +54,12 @@ func BenchmarkDBIteration(inputKVDir string, numVersions int, outputDir string, 
 	// Iterate over db at directory
 	fmt.Printf("Iterating Over DB at  %s\n", outputDir)
 
-	if dbBackend == RocksDBBackendName {
-		backend := dbbackend.RocksDBBackend{}
-		backend.BenchmarkDBForwardIteration(inputKVDir, numVersions, outputDir, concurrency, maxOps, iterationSteps)
+	backend, err := dbbackend.CreateDBBackend(dbBackend)
+	if err != nil {
+		panic(err)
 	}
+
+	backend.BenchmarkDBForwardIteration(inputKVDir, numVersions, outputDir, concurrency, maxOps, iterationSteps)
 
 	return
 }

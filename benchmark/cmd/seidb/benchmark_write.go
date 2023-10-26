@@ -1,6 +1,3 @@
-//go:build rocksdbBackend
-// +build rocksdbBackend
-
 package main
 
 import (
@@ -49,11 +46,6 @@ func benchmarkWrite(cmd *cobra.Command, args []string) {
 		panic("Must provide output dir")
 	}
 
-	_, isAcceptedBackend := ValidDBBackends[dbBackend]
-	if !isAcceptedBackend {
-		panic(fmt.Sprintf("Unsupported db backend: %s\n", dbBackend))
-	}
-
 	BenchmarkWrite(rawKVInputDir, numVersions, outputDir, dbBackend, concurrency, batchSize)
 }
 
@@ -67,10 +59,12 @@ func BenchmarkWrite(inputKVDir string, numVersions int, outputDir string, dbBack
 	// Iterate over files in directory
 	fmt.Printf("Reading Raw Keys and Values from %s\n", inputKVDir)
 
-	if dbBackend == RocksDBBackendName {
-		backend := dbbackend.RocksDBBackend{}
-		backend.BenchmarkDBWrite(inputKVDir, numVersions, outputDir, concurrency, batchSize)
+	backend, err := dbbackend.CreateDBBackend(dbBackend)
+	if err != nil {
+		panic(err)
 	}
+
+	backend.BenchmarkDBWrite(inputKVDir, numVersions, outputDir, concurrency, batchSize)
 
 	return
 }

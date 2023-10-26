@@ -1,6 +1,3 @@
-//go:build rocksdbBackend
-// +build rocksdbBackend
-
 package main
 
 import (
@@ -8,16 +5,6 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-)
-
-const RocksDBBackendName = "rocksDB"
-
-var (
-
-	// TODO: Will include rocksdb, pebbledb and sqlite in future PR's
-	ValidDBBackends = map[string]bool{
-		RocksDBBackendName: true,
-	}
 )
 
 func main() {
