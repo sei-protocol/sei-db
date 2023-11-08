@@ -41,6 +41,8 @@ func (rs *Store) restore(
 	}
 	defer importer.Close()
 	var snapshotItem snapshottypes.SnapshotItem
+	latency := int64(0)
+	count := 0
 loop:
 	for {
 		snapshotItem = snapshottypes.SnapshotItem{}
@@ -53,8 +55,9 @@ loop:
 
 		switch item := snapshotItem.Item.(type) {
 		case *snapshottypes.SnapshotItem_Store:
+			latency = int64(0)
+			count = 0
 			startTime := time.Now()
-
 			if err := importer.AddTree(item.Store.Name); err != nil {
 				return snapshottypes.SnapshotItem{}, err
 			}
@@ -81,8 +84,11 @@ loop:
 				node.Value = []byte{}
 			}
 			importer.AddNode(node)
-			latency := time.Since(startTime).Microseconds()
-			fmt.Printf("[SeiDB] Imported iavl entry with latency: %d microseconds\n", latency)
+			latency += time.Since(startTime).Microseconds()
+			count++
+			if count%10000 == 0 {
+				fmt.Printf("[SeiDB] Imported %d nodes with latency %d microseconds\n", count, latency)
+			}
 		default:
 			// unknown element, could be an extension
 			break loop
