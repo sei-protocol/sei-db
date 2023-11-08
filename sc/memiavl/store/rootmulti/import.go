@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"time"
 
 	"cosmossdk.io/errors"
 	snapshottypes "github.com/cosmos/cosmos-sdk/snapshots/types"
@@ -52,10 +53,15 @@ loop:
 
 		switch item := snapshotItem.Item.(type) {
 		case *snapshottypes.SnapshotItem_Store:
+			startTime := time.Now()
+
 			if err := importer.AddTree(item.Store.Name); err != nil {
 				return snapshottypes.SnapshotItem{}, err
 			}
+			latency := time.Since(startTime).Microseconds()
+			fmt.Printf("[SeiDB] Imported tree %s with latency: %d microseconds\n", item.Store.Name, latency)
 		case *snapshottypes.SnapshotItem_IAVL:
+			startTime := time.Now()
 			if item.IAVL.Height > math.MaxInt8 {
 				return snapshottypes.SnapshotItem{}, errors.Wrapf(sdkerrors.ErrLogic, "node height %v cannot exceed %v",
 					item.IAVL.Height, math.MaxInt8)
@@ -75,6 +81,8 @@ loop:
 				node.Value = []byte{}
 			}
 			importer.AddNode(node)
+			latency := time.Since(startTime).Microseconds()
+			fmt.Printf("[SeiDB] Imported iavl entry with latency: %d microseconds\n", latency)
 		default:
 			// unknown element, could be an extension
 			break loop
