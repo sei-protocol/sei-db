@@ -22,10 +22,10 @@ async-commit-buffer = {{ .StateCommit.AsyncCommitBuffer }}
 
 # SnapshotKeepRecent defines how many state-commit snapshots (besides the latest one) to keep 
 # defaults to 1 to make sure ibc relayers work.
-snapshot-keep-recent = {{ .StateCommit.SnapshotKeepRecent }}
+sc-keep-recent = {{ .StateCommit.SnapshotKeepRecent }}
 
 # SnapshotInterval defines the block interval the SC snapshot is taken, default to 10000.
-snapshot-interval = {{ .StateCommit.SnapshotInterval }}
+sc-snapshot-interval = {{ .StateCommit.SnapshotInterval }}
 
 # CacheSize defines the size of the cache for each memiavl store, default to 100000.
 cache-size = {{ .StateCommit.CacheSize }}

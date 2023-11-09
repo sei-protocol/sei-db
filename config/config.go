@@ -2,7 +2,7 @@ package config
 
 const (
 	DefaultCacheSize        = 100000
-	DefaultSnapshotInterval = 10000
+	DefaultSnapshotInterval = 20000
 )
 
 type StateCommitConfig struct {
