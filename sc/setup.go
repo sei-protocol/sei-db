@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	FlagSCEnable            = "state-commit.enable"
+	FlagSCEnable            = "state-commit.enable-sc"
 	FlagAsyncCommitBuffer   = "state-commit.async-commit-buffer"
 	FlagZeroCopy            = "state-commit.zero-copy"
 	FlagSnapshotKeepRecent  = "state-commit.snapshot-keep-recent"

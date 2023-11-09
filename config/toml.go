@@ -9,7 +9,7 @@ const DefaultConfigTemplate = `
 [state-commit]
 
 # Enable defines if the state-commit (memiavl) should be enabled to override existing IAVL db backend.
-enable = {{ .StateCommit.Enable }}
+enable-sc = {{ .StateCommit.Enable }}
 
 # ZeroCopy defines if memiavl should return slices pointing to mmap-ed buffers directly (zero-copy),
 # the zero-copied slices must not be retained beyond current block's execution.
@@ -34,7 +34,7 @@ cache-size = {{ .StateCommit.CacheSize }}
 
 # Enable defines if the state-store should be enabled for historical queries.
 # In order to use state-store, you need to make sure to enable state-commit at the same time
-enable = {{ .StateStore.Enable }}
+enable-ss = {{ .StateStore.Enable }}
 
 # DBBackend defines the backend database used for state-store.
 # Supported backends: pebbledb, rocksdb

@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	FlagSSEnable            = "state-store.enable"
+	FlagSSEnable            = "state-store.enable-ss"
 	FlagSSBackend           = "state-store.backend"
 	FlagSSAsyncWriterBuffer = "state-store.async-write-buffer"
 	FlagSSKeepRecent        = "state-store.keep-recent"
