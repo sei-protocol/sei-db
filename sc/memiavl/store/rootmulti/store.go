@@ -216,7 +216,7 @@ func (rs *Store) CacheMultiStoreWithVersion(version int64) (types.CacheMultiStor
 	opts := rs.opts
 	opts.TargetVersion = uint32(version)
 	opts.ReadOnly = true
-	rs.logger.Info("Loading memiavl store from version", "version", version)
+	rs.logger.Info("[SeiDB-Debug] Loading memiavl store from version", "version", version)
 	db, err := memiavl.Load(rs.dir, opts)
 	if err != nil {
 		return nil, err

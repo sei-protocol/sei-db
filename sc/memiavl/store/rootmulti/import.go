@@ -62,7 +62,7 @@ loop:
 				return snapshottypes.SnapshotItem{}, err
 			}
 			latency := time.Since(startTime).Microseconds()
-			fmt.Printf("[SeiDB] Imported tree %s with latency: %d microseconds\n", item.Store.Name, latency)
+			fmt.Printf("[SeiDB] Importing tree %s with latency: %d microseconds\n", item.Store.Name, latency)
 		case *snapshottypes.SnapshotItem_IAVL:
 			startTime := time.Now()
 			if item.IAVL.Height > math.MaxInt8 {
@@ -86,7 +86,7 @@ loop:
 			importer.AddNode(node)
 			latency += time.Since(startTime).Microseconds()
 			count++
-			if count%10000 == 0 {
+			if count%100000 == 0 {
 				fmt.Printf("[SeiDB] Imported %d nodes with latency %d microseconds\n", count, latency)
 			}
 		default:
