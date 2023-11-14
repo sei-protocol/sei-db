@@ -371,9 +371,10 @@ func (t *Tree) WriteSnapshot(snapshotDir string) error {
 	})
 }
 
-var TotalWriteTime = atomic.Int64{}
+var TotalDoWriteTime = atomic.Int64{}
 var TotalSyncTime = atomic.Int64{}
 var TotalFlushTime = atomic.Int64{}
+var TotalWriteSnapshotTime = atomic.Int64{}
 
 func writeSnapshot(
 	dir string, version uint32,
@@ -382,6 +383,13 @@ func writeSnapshot(
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
 		return err
 	}
+	startTime := time.Now()
+	defer func() {
+		TotalWriteSnapshotTime.Add(time.Since(startTime).Nanoseconds())
+		fmt.Printf("[MemIAVL-DEBUG] Total writeSnapshot time %d, total doWrite time %d, total flush time %d, total sync time %d, total nodes %d\n",
+			TotalWriteSnapshotTime.Load(), TotalDoWriteTime.Load(), TotalFlushTime.Load(), TotalSyncTime.Load(), TotalNodes.Load())
+
+	}()
 
 	nodesFile := filepath.Join(dir, FileNameNodes)
 	leavesFile := filepath.Join(dir, FileNameLeaves)
@@ -424,7 +432,7 @@ func writeSnapshot(
 	w := newSnapshotWriter(nodesWriter, leavesWriter, kvsWriter)
 	writeStartTime := time.Now()
 	leaves, err := doWrite(w)
-	TotalWriteTime.Add(time.Since(writeStartTime).Microseconds())
+	TotalDoWriteTime.Add(time.Since(writeStartTime).Nanoseconds())
 	if err != nil {
 		return err
 	}
@@ -440,7 +448,7 @@ func writeSnapshot(
 		if err := kvsWriter.Flush(); err != nil {
 			return err
 		}
-		TotalFlushTime.Add(time.Since(flushStartTime).Microseconds())
+		TotalFlushTime.Add(time.Since(flushStartTime).Nanoseconds())
 
 		syncStartTime := time.Now()
 		if err := fpKVs.Sync(); err != nil {
@@ -452,7 +460,7 @@ func writeSnapshot(
 		if err := fpNodes.Sync(); err != nil {
 			return err
 		}
-		TotalSyncTime.Add(time.Since(syncStartTime).Microseconds())
+		TotalSyncTime.Add(time.Since(syncStartTime).Nanoseconds())
 	}
 
 	// write metadata

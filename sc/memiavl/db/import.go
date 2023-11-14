@@ -105,7 +105,7 @@ type TreeImporter struct {
 }
 
 func NewTreeImporter(dir string, version int64) *TreeImporter {
-	nodesChan := make(chan *ExportNode)
+	nodesChan := make(chan *ExportNode, 1000)
 	quitChan := make(chan error)
 	go func() {
 		defer close(quitChan)
@@ -114,12 +114,8 @@ func NewTreeImporter(dir string, version int64) *TreeImporter {
 	return &TreeImporter{nodesChan, quitChan}
 }
 
-var TotalNodesChanWaitTime = atomic.Int64{}
-
 func (ai *TreeImporter) Add(node *ExportNode) {
-	startTime := time.Now()
 	ai.nodesChan <- node
-	TotalNodesChanWaitTime.Add(time.Since(startTime).Microseconds())
 }
 
 func (ai *TreeImporter) Close() error {
@@ -185,7 +181,7 @@ func (i *importer) Add(n *ExportNode) error {
 	startTime := time.Now()
 	defer func() {
 		TotalNodes.Add(1)
-		TotalTime.Add(time.Since(startTime).Microseconds())
+		TotalTime.Add(time.Since(startTime).Nanoseconds())
 	}()
 
 	// leaf node
@@ -202,7 +198,7 @@ func (i *importer) Add(n *ExportNode) error {
 		if err := i.writeLeaf(node.version, node.key, node.value, nodeHash); err != nil {
 			return err
 		}
-		TotalWriteLeafTime.Add(time.Since(writeLeafStartTime).Microseconds())
+		TotalWriteLeafTime.Add(time.Since(writeLeafStartTime).Nanoseconds())
 		i.leavesStack = append(i.leavesStack, i.leafCounter)
 		i.nodeStack = append(i.nodeStack, node)
 		return nil
@@ -232,7 +228,7 @@ func (i *importer) Add(n *ExportNode) error {
 	if err := i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash); err != nil {
 		return err
 	}
-	TotalWriteBranchTime.Add(time.Since(writeBranchStartTime).Microseconds())
+	TotalWriteBranchTime.Add(time.Since(writeBranchStartTime).Nanoseconds())
 	i.leavesStack = i.leavesStack[:len(i.leavesStack)-2]
 	i.leavesStack = append(i.leavesStack, i.leafCounter)
 
