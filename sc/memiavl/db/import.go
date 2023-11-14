@@ -146,7 +146,7 @@ func doImport(dir string, version int64, nodes <-chan *ExportNode) (returnErr er
 				return 0, err
 			}
 		}
-		fmt.Printf("[MemIAVL-DEBUG] Total time %d, total write leaf time %d, total write branch time %d\n", TotalTime, TotalWriteLeafTime, TotalWriteBranchTime)
+		fmt.Printf("[MemIAVL-DEBUG] Total nodes %d, total time %d, total write leaf time %d, total write branch time %d\n", TotalNodes.Load(), TotalTime.Load(), TotalWriteLeafTime.Load(), TotalWriteBranchTime.Load())
 
 		switch len(i.leavesStack) {
 		case 0:
