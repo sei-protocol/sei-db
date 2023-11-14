@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/sei-protocol/sei-db/common/utils"
 	"github.com/sei-protocol/sei-db/proto"
@@ -144,6 +145,7 @@ func doImport(dir string, version int64, nodes <-chan *ExportNode) (returnErr er
 				return 0, err
 			}
 		}
+		fmt.Printf("[MemIAVL-DEBUG] Total time %d, total write leaf time %d, total write branch time %d\n", TotalTime, TotalWriteLeafTime, TotalWriteBranchTime)
 
 		switch len(i.leavesStack) {
 		case 0:
@@ -165,11 +167,19 @@ type importer struct {
 	nodeStack []*MemNode
 }
 
+var TotalWriteLeafTime = int64(0)
+var TotalWriteBranchTime = int64(0)
+var TotalTime = int64(0)
+
 func (i *importer) Add(n *ExportNode) error {
 	if n.Version > int64(math.MaxUint32) {
 		return errors.New("version overflows uint32")
 	}
 
+	startTime := time.Now()
+	defer func() {
+		TotalTime += time.Since(startTime).Microseconds()
+	}()
 	if n.Height == 0 {
 		node := &MemNode{
 			height:  0,
@@ -179,9 +189,11 @@ func (i *importer) Add(n *ExportNode) error {
 			value:   n.Value,
 		}
 		nodeHash := node.Hash()
+		writeLeafStartTime := time.Now()
 		if err := i.writeLeaf(node.version, node.key, node.value, nodeHash); err != nil {
 			return err
 		}
+		TotalWriteLeafTime += time.Since(writeLeafStartTime).Microseconds()
 		i.leavesStack = append(i.leavesStack, i.leafCounter)
 		i.nodeStack = append(i.nodeStack, node)
 		return nil
@@ -207,10 +219,11 @@ func (i *importer) Add(n *ExportNode) error {
 	node.right = nil
 
 	preTrees := uint8(len(i.nodeStack) - 2)
+	writeBranchStartTime := time.Now()
 	if err := i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash); err != nil {
 		return err
 	}
-
+	TotalWriteBranchTime += time.Since(writeBranchStartTime).Microseconds()
 	i.leavesStack = i.leavesStack[:len(i.leavesStack)-2]
 	i.leavesStack = append(i.leavesStack, i.leafCounter)
 
