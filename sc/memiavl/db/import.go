@@ -114,8 +114,12 @@ func NewTreeImporter(dir string, version int64) *TreeImporter {
 	return &TreeImporter{nodesChan, quitChan}
 }
 
+var TotalNodesChanWaitTime = atomic.Int64{}
+
 func (ai *TreeImporter) Add(node *ExportNode) {
+	startTime := time.Now()
 	ai.nodesChan <- node
+	TotalNodesChanWaitTime.Add(time.Since(startTime).Microseconds())
 }
 
 func (ai *TreeImporter) Close() error {

@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"time"
 
 	"github.com/sei-protocol/sei-db/common/utils"
 )
@@ -369,6 +371,10 @@ func (t *Tree) WriteSnapshot(snapshotDir string) error {
 	})
 }
 
+var TotalWriteTime = atomic.Int64{}
+var TotalSyncTime = atomic.Int64{}
+var TotalFlushTime = atomic.Int64{}
+
 func writeSnapshot(
 	dir string, version uint32,
 	doWrite func(*snapshotWriter) (uint32, error),
@@ -416,12 +422,15 @@ func writeSnapshot(
 	kvsWriter := bufio.NewWriter(fpKVs)
 
 	w := newSnapshotWriter(nodesWriter, leavesWriter, kvsWriter)
+	writeStartTime := time.Now()
 	leaves, err := doWrite(w)
+	TotalWriteTime.Add(time.Since(writeStartTime).Microseconds())
 	if err != nil {
 		return err
 	}
 
 	if leaves > 0 {
+		flushStartTime := time.Now()
 		if err := nodesWriter.Flush(); err != nil {
 			return err
 		}
@@ -431,7 +440,9 @@ func writeSnapshot(
 		if err := kvsWriter.Flush(); err != nil {
 			return err
 		}
+		TotalFlushTime.Add(time.Since(flushStartTime).Microseconds())
 
+		syncStartTime := time.Now()
 		if err := fpKVs.Sync(); err != nil {
 			return err
 		}
@@ -441,6 +452,7 @@ func writeSnapshot(
 		if err := fpNodes.Sync(); err != nil {
 			return err
 		}
+		TotalSyncTime.Add(time.Since(syncStartTime).Microseconds())
 	}
 
 	// write metadata

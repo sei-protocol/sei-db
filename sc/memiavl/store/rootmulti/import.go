@@ -80,6 +80,8 @@ loop:
 			break loop
 		}
 	}
+	fmt.Printf("[MemIAVL-DEBUG] Total write time %d, total flush time %d, total sync time %d, total channel wait time %d, total nodes %d\n",
+		memiavl.TotalWriteTime.Load(), memiavl.TotalFlushTime.Load(), memiavl.TotalSyncTime.Load(), memiavl.TotalNodesChanWaitTime.Load(), memiavl.TotalNodes.Load())
 
 	if err := importer.Finalize(); err != nil {
 		return snapshottypes.SnapshotItem{}, err
