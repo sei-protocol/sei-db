@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/sei-protocol/sei-db/common/utils"
@@ -167,9 +168,10 @@ type importer struct {
 	nodeStack []*MemNode
 }
 
-var TotalWriteLeafTime = int64(0)
-var TotalWriteBranchTime = int64(0)
-var TotalTime = int64(0)
+var TotalWriteLeafTime = atomic.Int64{}
+var TotalWriteBranchTime = atomic.Int64{}
+var TotalTime = atomic.Int64{}
+var TotalNodes = atomic.Int64{}
 
 func (i *importer) Add(n *ExportNode) error {
 	if n.Version > int64(math.MaxUint32) {
@@ -178,8 +180,11 @@ func (i *importer) Add(n *ExportNode) error {
 
 	startTime := time.Now()
 	defer func() {
-		TotalTime += time.Since(startTime).Microseconds()
+		TotalNodes.Add(1)
+		TotalTime.Add(time.Since(startTime).Microseconds())
 	}()
+
+	// leaf node
 	if n.Height == 0 {
 		node := &MemNode{
 			height:  0,
@@ -193,7 +198,7 @@ func (i *importer) Add(n *ExportNode) error {
 		if err := i.writeLeaf(node.version, node.key, node.value, nodeHash); err != nil {
 			return err
 		}
-		TotalWriteLeafTime += time.Since(writeLeafStartTime).Microseconds()
+		TotalWriteLeafTime.Add(time.Since(writeLeafStartTime).Microseconds())
 		i.leavesStack = append(i.leavesStack, i.leafCounter)
 		i.nodeStack = append(i.nodeStack, node)
 		return nil
@@ -223,7 +228,7 @@ func (i *importer) Add(n *ExportNode) error {
 	if err := i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash); err != nil {
 		return err
 	}
-	TotalWriteBranchTime += time.Since(writeBranchStartTime).Microseconds()
+	TotalWriteBranchTime.Add(time.Since(writeBranchStartTime).Microseconds())
 	i.leavesStack = i.leavesStack[:len(i.leavesStack)-2]
 	i.leavesStack = append(i.leavesStack, i.leafCounter)
 
