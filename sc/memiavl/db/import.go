@@ -105,7 +105,7 @@ type TreeImporter struct {
 }
 
 func NewTreeImporter(dir string, version int64) *TreeImporter {
-	nodesChan := make(chan *ExportNode, 1000)
+	nodesChan := make(chan *ExportNode, 1000000)
 	quitChan := make(chan error)
 	go func() {
 		defer close(quitChan)
