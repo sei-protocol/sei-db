@@ -18,10 +18,10 @@ import (
 )
 
 const (
-	FlagSSEnable            = "state-store.enable"
-	FlagSSBackend           = "state-store.backend"
+	FlagSSEnable            = "state-store.enable-ss"
+	FlagSSBackend           = "state-store.ss-backend"
 	FlagSSAsyncWriterBuffer = "state-store.async-write-buffer"
-	FlagSSKeepRecent        = "state-store.keep-recent"
+	FlagSSKeepRecent        = "state-store.ss-keep-recent"
 	FlagSSPruneInterval     = "state-store.prune-interval-seconds"
 	FlagSSImportNumWorkers  = "state-store.import-num-workers"
 )

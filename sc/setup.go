@@ -11,11 +11,11 @@ import (
 )
 
 const (
-	FlagSCEnable            = "state-commit.enable"
+	FlagSCEnable            = "state-commit.sc-enable"
 	FlagAsyncCommitBuffer   = "state-commit.async-commit-buffer"
 	FlagZeroCopy            = "state-commit.zero-copy"
-	FlagSnapshotKeepRecent  = "state-commit.snapshot-keep-recent"
-	FlagSnapshotInterval    = "state-commit.snapshot-interval"
+	FlagSnapshotKeepRecent  = "state-commit.sc-keep-recent"
+	FlagSnapshotInterval    = "state-commit.sc-snapshot-interval"
 	FlagCacheSize           = "state-commit.cache-size"
 	FlagSnapshotWriterLimit = "state-commit.snapshot-writer-limit"
 )
