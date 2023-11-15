@@ -657,3 +657,11 @@ func (rs *Store) GetEvents() []abci.Event {
 func (rs *Store) ResetEvents() {
 	panic("should never attempt to reset events from commit multi store")
 }
+
+func (rs *Store) SetKVStores(handler func(key types.StoreKey, s types.KVStore) types.CacheWrap) types.MultiStore {
+	panic("not supported")
+}
+
+func (rs *Store) StoreKeys() []types.StoreKey {
+	panic("not supported")
+}

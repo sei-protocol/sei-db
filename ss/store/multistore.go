@@ -177,3 +177,11 @@ func (s *MultiStore) LatestVersion() int64 {
 func (s *MultiStore) Snapshot(_ uint64, _ protoio.Writer) error {
 	panic("not supported")
 }
+
+func (s *MultiStore) SetKVStores(handler func(key types.StoreKey, s types.KVStore) types.CacheWrap) types.MultiStore {
+	panic("not supported")
+}
+
+func (s *MultiStore) StoreKeys() []types.StoreKey {
+	panic("not supported")
+}
