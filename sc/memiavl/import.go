@@ -3,7 +3,6 @@ package memiavl
 import (
 	"errors"
 	"fmt"
-	"github.com/alitto/pond"
 	"math"
 	"os"
 	"path/filepath"
@@ -13,8 +12,8 @@ import (
 )
 
 var (
-	nodeChanSize = 100000000
-	bufIOSize    = 1024 * 1024
+	nodeChanSize = 10000
+	bufIOSize    = 1024 * 1024 * 1024
 )
 
 type MultiTreeImporter struct {
@@ -61,6 +60,11 @@ func (mti *MultiTreeImporter) Add(item interface{}) error {
 }
 
 func (mti *MultiTreeImporter) AddTree(name string) error {
+	if mti.importer != nil {
+		if err := mti.importer.Close(); err != nil {
+			return err
+		}
+	}
 	mti.importer = NewTreeImporter(filepath.Join(mti.tmpDir(), name), mti.height)
 	return nil
 }
@@ -160,10 +164,6 @@ type importer struct {
 	leavesStack []uint32
 	// keep track of the pending nodes
 	nodeStack []*MemNode
-
-	leafWorkerPool   *pond.TaskGroup
-	kvWorkerPool     *pond.TaskGroup
-	branchWorkerPool *pond.TaskGroup
 }
 
 func (i *importer) Add(n *types.SnapshotNode) error {
@@ -179,8 +179,8 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 			key:     n.Key,
 			value:   n.Value,
 		}
-		nodeHash := node.Hash()
-		i.writeLeaf(node.version, node.key, node.value, nodeHash)
+		//nodeHash := node.Hash()
+		//i.writeLeaf(node.version, node.key, node.value, nodeHash)
 		i.leavesStack = append(i.leavesStack, i.leafCounter)
 		i.nodeStack = append(i.nodeStack, node)
 		return nil
@@ -199,13 +199,13 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 		left:    leftNode,
 		right:   rightNode,
 	}
-	nodeHash := node.Hash()
+	node.Hash()
 
 	// remove unnecessary reference to avoid memory leak
 	node.left = nil
 	node.right = nil
-	preTrees := uint8(len(i.nodeStack) - 2)
-	i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash)
+	//preTrees := uint8(len(i.nodeStack) - 2)
+	//i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash)
 	i.leavesStack = i.leavesStack[:len(i.leavesStack)-2]
 	i.leavesStack = append(i.leavesStack, i.leafCounter)
 
