@@ -4,17 +4,14 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"math"
-	"sync"
-	"sync/atomic"
-	"unsafe"
-
 	ics23 "github.com/confio/ics23/go"
 	"github.com/cosmos/iavl"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/sei-protocol/sei-db/common/utils"
 	"github.com/sei-protocol/sei-db/sc/types"
 	dbm "github.com/tendermint/tm-db"
+	"math"
+	"sync"
 )
 
 var _ types.Tree = (*Tree)(nil)
@@ -302,10 +299,6 @@ func (t *Tree) addToCache(key, value []byte) {
 	}
 }
 
-func UnsafeBytesToStr(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
-}
-
 func (t *Tree) removeFromCache(key []byte) {
 	if t.cache != nil {
 		t.mtx.Lock()
@@ -314,9 +307,6 @@ func (t *Tree) removeFromCache(key []byte) {
 	}
 }
 
-var HIT_COUNT = atomic.Int64{}
-var MISS_COUNT = atomic.Int64{}
-
 func (t *Tree) getFromCache(key []byte) []byte {
 	if t.cache == nil {
 		return nil
@@ -324,13 +314,8 @@ func (t *Tree) getFromCache(key []byte) []byte {
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
 	if value, ok := t.cache.Get(string(key)); ok {
-		HIT_COUNT.Add(1)
-		if HIT_COUNT.Load()%10000 == 0 {
-			fmt.Printf("[Debug] Cache hit %d, cache miss %d\n", HIT_COUNT.Load(), MISS_COUNT.Load())
-		}
 		return value
 	}
-	MISS_COUNT.Add(1)
 	return nil
 }
 
