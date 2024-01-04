@@ -34,8 +34,7 @@ type Tree struct {
 	snapshot *Snapshot
 
 	// simple lru cache provided by iavl library
-	cache    cache.Cache
-	lruCache sync.Map
+	cache cache.Cache
 
 	initialVersion, cowVersion uint32
 
@@ -71,9 +70,6 @@ func NewEmptyTree(version uint64, initialVersion uint32, cacheSize int) *Tree {
 		zeroCopy: true,
 		cache:    NewCache(cacheSize),
 		mtx:      &sync.RWMutex{},
-	}
-	if cacheSize > 0 {
-		tree.lruCache = sync.Map{}
 	}
 	return tree
 }
@@ -309,13 +305,11 @@ func nextVersionU32(v uint32, initialVersion uint32) uint32 {
 }
 
 func (t *Tree) addToCache(key, value []byte) {
-	//if t.cache != nil {
-	//	t.mtx.Lock()
-	//	t.cache.Add(&cacheNode{key, value})
-	//	t.mtx.Unlock()
-	//}
-	keyStr := UnsafeBytesToStr(key)
-	t.lruCache.Store(keyStr, value)
+	if t.cache != nil {
+		t.mtx.Lock()
+		t.cache.Add(&cacheNode{key, value})
+		t.mtx.Unlock()
+	}
 }
 
 func UnsafeBytesToStr(b []byte) string {
@@ -331,20 +325,14 @@ func (t *Tree) removeFromCache(key []byte) {
 }
 
 func (t *Tree) getFromCache(key []byte) []byte {
-	//if t.cache == nil {
-	//	return nil
-	//}
-	//t.mtx.RLock()
-	//defer t.mtx.RUnlock()
-	//if node := t.cache.Get(key); node != nil {
-	//	return node.(*cacheNode).value
-	//}
-	keyStr := UnsafeBytesToStr(key)
-	value, ok := t.lruCache.Load(keyStr)
-	if ok {
-		return value.([]byte)
+	if t.cache == nil {
+		return nil
 	}
-	return nil
+	t.mtx.RLock()
+	defer t.mtx.RUnlock()
+	if node := t.cache.Get(key); node != nil {
+		return node.(*cacheNode).value
+	}
 }
 
 // GetProof takes a key for creating existence or absence proof and returns the
