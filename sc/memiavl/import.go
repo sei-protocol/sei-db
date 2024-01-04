@@ -61,11 +61,10 @@ func (mti *MultiTreeImporter) Add(item interface{}) error {
 }
 
 func (mti *MultiTreeImporter) AddTree(name string) error {
-	if mti.importer != nil {
-		if err := mti.importer.Close(); err != nil {
-			return err
-		}
-	}
+	prevImporter := mti.importer
+	go func() {
+		prevImporter.Close()
+	}()
 	mti.importer = NewTreeImporter(filepath.Join(mti.tmpDir(), name), mti.height)
 	return nil
 }
