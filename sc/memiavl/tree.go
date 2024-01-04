@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"unsafe"
 
 	ics23 "github.com/confio/ics23/go"
 	"github.com/cosmos/iavl"
@@ -313,8 +314,12 @@ func (t *Tree) addToCache(key, value []byte) {
 	//	t.cache.Add(&cacheNode{key, value})
 	//	t.mtx.Unlock()
 	//}
-	t.lruCache.Store(key, value)
+	keyStr := UnsafeBytesToStr(key)
+	t.lruCache.Store(keyStr, value)
+}
 
+func UnsafeBytesToStr(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
 }
 
 func (t *Tree) removeFromCache(key []byte) {
@@ -334,7 +339,8 @@ func (t *Tree) getFromCache(key []byte) []byte {
 	//if node := t.cache.Get(key); node != nil {
 	//	return node.(*cacheNode).value
 	//}
-	value, ok := t.lruCache.Load(key)
+	keyStr := UnsafeBytesToStr(key)
+	value, ok := t.lruCache.Load(keyStr)
 	if ok {
 		return value.([]byte)
 	}
