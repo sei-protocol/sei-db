@@ -76,7 +76,7 @@ func NewEmptyTree(version uint64, initialVersion uint32, cacheSize int) *Tree {
 		mtx:      &sync.RWMutex{},
 	}
 	if cacheSize > 0 {
-		lruCache, _ := lru.New[[]byte, []byte](cacheSize)
+		lruCache, _ := lru.New(cacheSize)
 		tree.lruCache = lruCache
 	}
 	return tree
