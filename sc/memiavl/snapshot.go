@@ -463,6 +463,8 @@ func writeSnapshot(
 type snapshotWriter struct {
 	nodesWriter, leavesWriter, kvWriter io.Writer
 
+	leafChannel chan SnapshotLeafNode
+
 	// count how many nodes have been written
 	branchCounter, leafCounter uint32
 
@@ -500,6 +502,20 @@ func (w *snapshotWriter) writeKeyValue(key, value []byte) error {
 
 	w.kvsOffset += 4 + 4 + uint64(len(key)) + uint64(len(value))
 	return nil
+}
+
+type SnapshotLeafNode struct {
+	version uint32
+	key     []byte
+	value   []byte
+	hash    []byte
+}
+
+type SnapshotBranchNode struct {
+}
+
+func (w *snapshotWriter) writeLeafAsync(leafNode SnapshotLeafNode) {
+	w.leafChannel <- leafNode
 }
 
 func (w *snapshotWriter) writeLeaf(version uint32, key, value, hash []byte) error {

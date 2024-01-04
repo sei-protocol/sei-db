@@ -3,6 +3,7 @@ package memiavl
 import (
 	"errors"
 	"fmt"
+	"github.com/alitto/pond"
 	"math"
 	"os"
 	"path/filepath"
@@ -102,9 +103,14 @@ type TreeImporter struct {
 	quitChan  chan error
 }
 
+var LeafWorkerPool = pond.New(1, 10000)
+var BranchWorkerPool = pond.New(1, 10000)
+
 func NewTreeImporter(dir string, version int64) *TreeImporter {
 	nodesChan := make(chan *types.SnapshotNode, nodeChanSize)
 	quitChan := make(chan error)
+	LeafWorkerPool = pond.New(1, 10000)
+	BranchWorkerPool = pond.New(1, 10000)
 	go func() {
 		defer close(quitChan)
 		quitChan <- doImport(dir, version, nodesChan)
@@ -118,6 +124,8 @@ func (ai *TreeImporter) Add(node *types.SnapshotNode) {
 
 func (ai *TreeImporter) Close() error {
 	var err error
+	LeafWorkerPool.StopAndWait()
+	BranchWorkerPool.StopAndWait()
 	// tolerate double close
 	if ai.nodesChan != nil {
 		close(ai.nodesChan)
@@ -179,9 +187,9 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 			value:   n.Value,
 		}
 		nodeHash := node.Hash()
-		if err := i.writeLeaf(node.version, node.key, node.value, nodeHash); err != nil {
-			return err
-		}
+		LeafWorkerPool.Submit(func() {
+			i.writeLeaf(node.version, node.key, node.value, nodeHash)
+		})
 		i.leavesStack = append(i.leavesStack, i.leafCounter)
 		i.nodeStack = append(i.nodeStack, node)
 		return nil
@@ -206,10 +214,10 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 	node.left = nil
 	node.right = nil
 
-	preTrees := uint8(len(i.nodeStack) - 2)
-	if err := i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash); err != nil {
-		return err
-	}
+	BranchWorkerPool.Submit(func() {
+		preTrees := uint8(len(i.nodeStack) - 2)
+		i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash)
+	})
 
 	i.leavesStack = i.leavesStack[:len(i.leavesStack)-2]
 	i.leavesStack = append(i.leavesStack, i.leafCounter)
