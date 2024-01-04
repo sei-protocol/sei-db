@@ -13,7 +13,7 @@ import (
 
 var (
 	nodeChanSize = 10000
-	bufIOSize    = 1024 * 1024 * 1024
+	bufIOSize    = 64 * 1024 * 1024
 )
 
 type MultiTreeImporter struct {
@@ -170,47 +170,46 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 	if n.Version > int64(math.MaxUint32) {
 		return errors.New("version overflows uint32")
 	}
+	if n.Height == 0 {
+		node := &MemNode{
+			height:  0,
+			size:    1,
+			version: uint32(n.Version),
+			key:     n.Key,
+			value:   n.Value,
+		}
+		nodeHash := node.Hash()
+		i.writeLeaf(node.version, node.key, node.value, nodeHash)
+		i.leavesStack = append(i.leavesStack, i.leafCounter)
+		i.nodeStack = append(i.nodeStack, node)
+		return nil
+	}
 
-	//if n.Height == 0 {
-	//	node := &MemNode{
-	//		height:  0,
-	//		size:    1,
-	//		version: uint32(n.Version),
-	//		key:     n.Key,
-	//		value:   n.Value,
-	//	}
-	//	//nodeHash := node.Hash()
-	//	//i.writeLeaf(node.version, node.key, node.value, nodeHash)
-	//	i.leavesStack = append(i.leavesStack, i.leafCounter)
-	//	i.nodeStack = append(i.nodeStack, node)
-	//	return nil
-	//}
-	//
-	//// branch node
-	////keyLeaf := i.leavesStack[len(i.leavesStack)-2]
-	//leftNode := i.nodeStack[len(i.nodeStack)-2]
-	//rightNode := i.nodeStack[len(i.nodeStack)-1]
-	//
-	//node := &MemNode{
-	//	height:  uint8(n.Height),
-	//	size:    leftNode.size + rightNode.size,
-	//	version: uint32(n.Version),
-	//	key:     n.Key,
-	//	left:    leftNode,
-	//	right:   rightNode,
-	//}
-	////node.Hash()
-	//
-	//// remove unnecessary reference to avoid memory leak
-	//node.left = nil
-	//node.right = nil
-	////preTrees := uint8(len(i.nodeStack) - 2)
-	////i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash)
-	//i.leavesStack = i.leavesStack[:len(i.leavesStack)-2]
-	//i.leavesStack = append(i.leavesStack, i.leafCounter)
-	//
-	//i.nodeStack = i.nodeStack[:len(i.nodeStack)-2]
-	//i.nodeStack = append(i.nodeStack, node)
+	// branch node
+	keyLeaf := i.leavesStack[len(i.leavesStack)-2]
+	leftNode := i.nodeStack[len(i.nodeStack)-2]
+	rightNode := i.nodeStack[len(i.nodeStack)-1]
+
+	node := &MemNode{
+		height:  uint8(n.Height),
+		size:    leftNode.size + rightNode.size,
+		version: uint32(n.Version),
+		key:     n.Key,
+		left:    leftNode,
+		right:   rightNode,
+	}
+
+	// remove unnecessary reference to avoid memory leak
+	nodeHash := node.Hash()
+	node.left = nil
+	node.right = nil
+	preTrees := uint8(len(i.nodeStack) - 2)
+	i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash)
+	i.leavesStack = i.leavesStack[:len(i.leavesStack)-2]
+	i.leavesStack = append(i.leavesStack, i.leafCounter)
+
+	i.nodeStack = i.nodeStack[:len(i.nodeStack)-2]
+	i.nodeStack = append(i.nodeStack, node)
 	return nil
 }
 
