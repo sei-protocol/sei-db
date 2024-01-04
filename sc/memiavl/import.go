@@ -138,10 +138,7 @@ func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (retu
 
 	return writeSnapshot(dir, uint32(version), func(w *snapshotWriter) (uint32, error) {
 		i := &importer{
-			snapshotWriter:   *w,
-			leafWorkerPool:   pond.New(1, 1000).Group(),
-			branchWorkerPool: pond.New(1, 1000).Group(),
-			kvWorkerPool:     pond.New(1, 1000).Group(),
+			snapshotWriter: *w,
 		}
 
 		for node := range nodes {
@@ -149,10 +146,6 @@ func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (retu
 				return 0, err
 			}
 		}
-
-		i.kvWorkerPool.Wait()
-		i.leafWorkerPool.Wait()
-		i.branchWorkerPool.Wait()
 
 		switch len(i.leavesStack) {
 		case 0:
@@ -192,12 +185,7 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 			value:   n.Value,
 		}
 		nodeHash := node.Hash()
-		i.leafWorkerPool.Submit(func() {
-			i.writeLeaf(node.version, node.key, node.value, nodeHash)
-		})
-		i.kvWorkerPool.Submit(func() {
-			i.writeKV(node.key, node.value)
-		})
+		i.writeLeaf(node.version, node.key, node.value, nodeHash)
 		i.leavesStack = append(i.leavesStack, i.leafCounter)
 		i.nodeStack = append(i.nodeStack, node)
 		return nil
@@ -221,12 +209,8 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 	// remove unnecessary reference to avoid memory leak
 	node.left = nil
 	node.right = nil
-
-	i.branchWorkerPool.Submit(func() {
-		preTrees := uint8(len(i.nodeStack) - 2)
-		i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash)
-	})
-
+	preTrees := uint8(len(i.nodeStack) - 2)
+	i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash)
 	i.leavesStack = i.leavesStack[:len(i.leavesStack)-2]
 	i.leavesStack = append(i.leavesStack, i.leafCounter)
 

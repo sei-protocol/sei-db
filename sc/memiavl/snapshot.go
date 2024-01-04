@@ -513,7 +513,9 @@ func (w *snapshotWriter) writeLeaf(version uint32, key, value, hash []byte) erro
 	binary.LittleEndian.PutUint32(buf[OffsetLeafVersion:], version)
 	binary.LittleEndian.PutUint32(buf[OffsetLeafKeyLen:], uint32(len(key)))
 	binary.LittleEndian.PutUint64(buf[OffsetLeafKeyOffset:], w.kvsOffset)
-
+	if err := w.writeKeyValue(key, value); err != nil {
+		return err
+	}
 	if _, err := w.leavesWriter.Write(buf[:]); err != nil {
 		return err
 	}
@@ -522,13 +524,6 @@ func (w *snapshotWriter) writeLeaf(version uint32, key, value, hash []byte) erro
 	}
 
 	w.leafCounter++
-	return nil
-}
-
-func (w *snapshotWriter) writeKV(key, value []byte) error {
-	if err := w.writeKeyValue(key, value); err != nil {
-		return err
-	}
 	return nil
 }
 
