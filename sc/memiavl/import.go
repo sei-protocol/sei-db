@@ -199,7 +199,7 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 		left:    leftNode,
 		right:   rightNode,
 	}
-	node.Hash()
+	//node.Hash()
 
 	// remove unnecessary reference to avoid memory leak
 	node.left = nil
