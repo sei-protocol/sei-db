@@ -187,7 +187,7 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 	}
 
 	// branch node
-	keyLeaf := i.leavesStack[len(i.leavesStack)-2]
+	//keyLeaf := i.leavesStack[len(i.leavesStack)-2]
 	leftNode := i.nodeStack[len(i.nodeStack)-2]
 	rightNode := i.nodeStack[len(i.nodeStack)-1]
 
