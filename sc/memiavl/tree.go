@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	lru "github.com/hashicorp/golang-lru"
 	"math"
 	"sync"
 
@@ -33,7 +34,8 @@ type Tree struct {
 	snapshot *Snapshot
 
 	// simple lru cache provided by iavl library
-	cache cache.Cache
+	cache    cache.Cache
+	lruCache *lru.Cache
 
 	initialVersion, cowVersion uint32
 
@@ -61,8 +63,11 @@ func NewEmptyTree(version uint64, initialVersion uint32, cacheSize int) *Tree {
 	if version >= math.MaxUint32 {
 		panic("version overflows uint32")
 	}
+	if cacheSize > 0 {
 
-	return &Tree{
+	}
+
+	tree := &Tree{
 		version:        uint32(version),
 		initialVersion: initialVersion,
 		// no need to copy if the tree is not backed by snapshot
@@ -70,6 +75,11 @@ func NewEmptyTree(version uint64, initialVersion uint32, cacheSize int) *Tree {
 		cache:    NewCache(cacheSize),
 		mtx:      &sync.RWMutex{},
 	}
+	if cacheSize > 0 {
+		lruCache, _ := lru.New[[]byte, []byte](cacheSize)
+		tree.lruCache = lruCache
+	}
+	return tree
 }
 
 // New creates an empty tree at genesis version
@@ -303,10 +313,13 @@ func nextVersionU32(v uint32, initialVersion uint32) uint32 {
 }
 
 func (t *Tree) addToCache(key, value []byte) {
-	if t.cache != nil {
-		t.mtx.Lock()
-		t.cache.Add(&cacheNode{key, value})
-		t.mtx.Unlock()
+	//if t.cache != nil {
+	//	t.mtx.Lock()
+	//	t.cache.Add(&cacheNode{key, value})
+	//	t.mtx.Unlock()
+	//}
+	if t.lruCache != nil {
+		t.lruCache.Add(key, value)
 	}
 }
 
@@ -319,13 +332,19 @@ func (t *Tree) removeFromCache(key []byte) {
 }
 
 func (t *Tree) getFromCache(key []byte) []byte {
-	if t.cache == nil {
-		return nil
-	}
-	t.mtx.RLock()
-	defer t.mtx.RUnlock()
-	if node := t.cache.Get(key); node != nil {
-		return node.(*cacheNode).value
+	//if t.cache == nil {
+	//	return nil
+	//}
+	//t.mtx.RLock()
+	//defer t.mtx.RUnlock()
+	//if node := t.cache.Get(key); node != nil {
+	//	return node.(*cacheNode).value
+	//}
+	if t.lruCache != nil {
+		value, ok := t.lruCache.Get(key)
+		if ok {
+			return value.([]byte)
+		}
 	}
 	return nil
 }
