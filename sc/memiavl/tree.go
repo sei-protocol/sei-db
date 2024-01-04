@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	ics23 "github.com/confio/ics23/go"
@@ -44,18 +45,6 @@ type Tree struct {
 
 	// sync.RWMutex is used to protect the cache for thread safety
 	mtx *sync.RWMutex
-}
-
-type cacheNode struct {
-	key, value []byte
-}
-
-func (n *cacheNode) GetCacheKey() []byte {
-	return n.key
-}
-
-func (n *cacheNode) GetKey() []byte {
-	return n.key
 }
 
 // NewEmptyTree creates an empty tree at an arbitrary version.
@@ -325,6 +314,8 @@ func (t *Tree) removeFromCache(key []byte) {
 	}
 }
 
+var HIT_COUNT = atomic.Int64{}
+
 func (t *Tree) getFromCache(key []byte) []byte {
 	if t.cache == nil {
 		return nil
@@ -332,6 +323,8 @@ func (t *Tree) getFromCache(key []byte) []byte {
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
 	if value, ok := t.cache.Get(string(key)); ok {
+		HIT_COUNT.Add(1)
+		fmt.Printf("[Debug] Cache hit %d\n", HIT_COUNT.Load())
 		return value
 	}
 	return nil
