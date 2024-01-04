@@ -141,6 +141,7 @@ func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (retu
 			snapshotWriter:   *w,
 			leafWorkerPool:   pond.New(1, 1000),
 			branchWorkerPool: pond.New(1, 1000),
+			kvWorkerPool:     pond.New(1, 1000),
 		}
 
 		for node := range nodes {
@@ -148,8 +149,7 @@ func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (retu
 				return 0, err
 			}
 		}
-		i.leafWorkerPool.StopAndWait()
-		i.branchWorkerPool.StopAndWait()
+
 		switch len(i.leavesStack) {
 		case 0:
 			return 0, nil
@@ -170,6 +170,7 @@ type importer struct {
 	nodeStack []*MemNode
 
 	leafWorkerPool   *pond.WorkerPool
+	kvWorkerPool     *pond.WorkerPool
 	branchWorkerPool *pond.WorkerPool
 }
 
@@ -189,6 +190,9 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 		nodeHash := node.Hash()
 		i.leafWorkerPool.Submit(func() {
 			i.writeLeaf(node.version, node.key, node.value, nodeHash)
+		})
+		i.kvWorkerPool.Submit(func() {
+			i.writeKV(node.key, node.value)
 		})
 		i.leavesStack = append(i.leavesStack, i.leafCounter)
 		i.nodeStack = append(i.nodeStack, node)
