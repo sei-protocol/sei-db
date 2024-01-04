@@ -14,7 +14,7 @@ import (
 
 var (
 	nodeChanSize = 10000
-	bufIOSize    = 64 * 1024 * 1024
+	bufIOSize    = 10 * 1024 * 1024 * 1024
 )
 
 type MultiTreeImporter struct {
