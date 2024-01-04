@@ -333,6 +333,7 @@ func (t *Tree) getFromCache(key []byte) []byte {
 	if node := t.cache.Get(key); node != nil {
 		return node.(*cacheNode).value
 	}
+	return nil
 }
 
 // GetProof takes a key for creating existence or absence proof and returns the
