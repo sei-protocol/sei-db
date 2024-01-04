@@ -10,7 +10,7 @@ import (
 
 	ics23 "github.com/confio/ics23/go"
 	"github.com/cosmos/iavl"
-	"github.com/cosmos/iavl/cache"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/sei-protocol/sei-db/common/utils"
 	"github.com/sei-protocol/sei-db/sc/types"
 	dbm "github.com/tendermint/tm-db"
@@ -19,11 +19,12 @@ import (
 var _ types.Tree = (*Tree)(nil)
 var emptyHash = sha256.New().Sum(nil)
 
-func NewCache(cacheSize int) cache.Cache {
+func NewCache(cacheSize int) *lru.TwoQueueCache[string, []byte] {
 	if cacheSize == 0 {
 		return nil
 	}
-	return cache.New(cacheSize)
+	cache, _ := lru.New2Q[string, []byte](cacheSize)
+	return cache
 }
 
 // verify change sets by replay them to rebuild iavl tree and verify the root hashes
@@ -34,7 +35,7 @@ type Tree struct {
 	snapshot *Snapshot
 
 	// simple lru cache provided by iavl library
-	cache cache.Cache
+	cache *lru.TwoQueueCache[string, []byte]
 
 	initialVersion, cowVersion uint32
 
@@ -307,7 +308,7 @@ func nextVersionU32(v uint32, initialVersion uint32) uint32 {
 func (t *Tree) addToCache(key, value []byte) {
 	if t.cache != nil {
 		t.mtx.Lock()
-		t.cache.Add(&cacheNode{key, value})
+		t.cache.Add(string(key), value)
 		t.mtx.Unlock()
 	}
 }
@@ -319,8 +320,8 @@ func UnsafeBytesToStr(b []byte) string {
 func (t *Tree) removeFromCache(key []byte) {
 	if t.cache != nil {
 		t.mtx.Lock()
-		t.cache.Remove(key)
-		defer t.mtx.Unlock()
+		t.cache.Remove(string(key))
+		t.mtx.Unlock()
 	}
 }
 
@@ -330,8 +331,8 @@ func (t *Tree) getFromCache(key []byte) []byte {
 	}
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
-	if node := t.cache.Get(key); node != nil {
-		return node.(*cacheNode).value
+	if value, ok := t.cache.Get(string(key)); ok {
+		return value
 	}
 	return nil
 }
