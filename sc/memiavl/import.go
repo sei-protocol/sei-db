@@ -103,14 +103,9 @@ type TreeImporter struct {
 	quitChan  chan error
 }
 
-var LeafWorkerPool = pond.New(1, 10000)
-var BranchWorkerPool = pond.New(1, 10000)
-
 func NewTreeImporter(dir string, version int64) *TreeImporter {
 	nodesChan := make(chan *types.SnapshotNode, nodeChanSize)
 	quitChan := make(chan error)
-	LeafWorkerPool = pond.New(1, 10000)
-	BranchWorkerPool = pond.New(1, 10000)
 	go func() {
 		defer close(quitChan)
 		quitChan <- doImport(dir, version, nodesChan)
@@ -124,8 +119,7 @@ func (ai *TreeImporter) Add(node *types.SnapshotNode) {
 
 func (ai *TreeImporter) Close() error {
 	var err error
-	LeafWorkerPool.StopAndWait()
-	BranchWorkerPool.StopAndWait()
+
 	// tolerate double close
 	if ai.nodesChan != nil {
 		close(ai.nodesChan)
@@ -144,7 +138,9 @@ func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (retu
 
 	return writeSnapshot(dir, uint32(version), func(w *snapshotWriter) (uint32, error) {
 		i := &importer{
-			snapshotWriter: *w,
+			snapshotWriter:   *w,
+			leafWorkerPool:   pond.New(1, 1000),
+			branchWorkerPool: pond.New(1, 1000),
 		}
 
 		for node := range nodes {
@@ -152,7 +148,8 @@ func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (retu
 				return 0, err
 			}
 		}
-
+		i.leafWorkerPool.StopAndWait()
+		i.branchWorkerPool.StopAndWait()
 		switch len(i.leavesStack) {
 		case 0:
 			return 0, nil
@@ -171,6 +168,9 @@ type importer struct {
 	leavesStack []uint32
 	// keep track of the pending nodes
 	nodeStack []*MemNode
+
+	leafWorkerPool   *pond.WorkerPool
+	branchWorkerPool *pond.WorkerPool
 }
 
 func (i *importer) Add(n *types.SnapshotNode) error {
@@ -187,7 +187,7 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 			value:   n.Value,
 		}
 		nodeHash := node.Hash()
-		LeafWorkerPool.Submit(func() {
+		i.leafWorkerPool.Submit(func() {
 			i.writeLeaf(node.version, node.key, node.value, nodeHash)
 		})
 		i.leavesStack = append(i.leavesStack, i.leafCounter)
@@ -214,7 +214,7 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 	node.left = nil
 	node.right = nil
 
-	BranchWorkerPool.Submit(func() {
+	i.branchWorkerPool.Submit(func() {
 		preTrees := uint8(len(i.nodeStack) - 2)
 		i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash)
 	})
