@@ -324,7 +324,9 @@ func (t *Tree) getFromCache(key []byte) []byte {
 	defer t.mtx.RUnlock()
 	if value, ok := t.cache.Get(string(key)); ok {
 		HIT_COUNT.Add(1)
-		fmt.Printf("[Debug] Cache hit %d\n", HIT_COUNT.Load())
+		if HIT_COUNT.Load()%10000 == 0 {
+			fmt.Printf("[Debug] Cache hit %d\n", HIT_COUNT.Load())
+		}
 		return value
 	}
 	return nil
