@@ -303,28 +303,29 @@ func nextVersionU32(v uint32, initialVersion uint32) uint32 {
 }
 
 func (t *Tree) addToCache(key, value []byte) {
-	t.mtx.Lock()
-	defer t.mtx.Unlock()
 	if t.cache != nil {
+		t.mtx.Lock()
 		t.cache.Add(&cacheNode{key, value})
+		t.mtx.Unlock()
 	}
 }
 
 func (t *Tree) removeFromCache(key []byte) {
-	t.mtx.Lock()
-	defer t.mtx.Unlock()
 	if t.cache != nil {
+		t.mtx.Lock()
 		t.cache.Remove(key)
+		defer t.mtx.Unlock()
 	}
 }
 
 func (t *Tree) getFromCache(key []byte) []byte {
+	if t.cache == nil {
+		return nil
+	}
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
-	if t.cache != nil {
-		if node := t.cache.Get(key); node != nil {
-			return node.(*cacheNode).value
-		}
+	if node := t.cache.Get(key); node != nil {
+		return node.(*cacheNode).value
 	}
 	return nil
 }
