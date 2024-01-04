@@ -315,6 +315,7 @@ func (t *Tree) removeFromCache(key []byte) {
 }
 
 var HIT_COUNT = atomic.Int64{}
+var MISS_COUNT = atomic.Int64{}
 
 func (t *Tree) getFromCache(key []byte) []byte {
 	if t.cache == nil {
@@ -325,10 +326,11 @@ func (t *Tree) getFromCache(key []byte) []byte {
 	if value, ok := t.cache.Get(string(key)); ok {
 		HIT_COUNT.Add(1)
 		if HIT_COUNT.Load()%10000 == 0 {
-			fmt.Printf("[Debug] Cache hit %d\n", HIT_COUNT.Load())
+			fmt.Printf("[Debug] Cache hit %d, cache miss %d\n", HIT_COUNT.Load(), MISS_COUNT.Load())
 		}
 		return value
 	}
+	MISS_COUNT.Add(1)
 	return nil
 }
 
