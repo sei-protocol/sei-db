@@ -415,16 +415,6 @@ func writeSnapshot(
 	}
 
 	if leaves > 0 {
-		if err := nodesWriter.Flush(); err != nil {
-			return err
-		}
-		if err := leavesWriter.Flush(); err != nil {
-			return err
-		}
-		if err := kvsWriter.Flush(); err != nil {
-			return err
-		}
-
 		if err := fpKVs.Sync(); err != nil {
 			return err
 		}
