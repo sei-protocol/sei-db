@@ -139,9 +139,9 @@ func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (retu
 	return writeSnapshot(dir, uint32(version), func(w *snapshotWriter) (uint32, error) {
 		i := &importer{
 			snapshotWriter:   *w,
-			leafWorkerPool:   pond.New(1, 1000),
-			branchWorkerPool: pond.New(1, 1000),
-			kvWorkerPool:     pond.New(1, 1000),
+			leafWorkerPool:   pond.New(1, 1000).Group(),
+			branchWorkerPool: pond.New(1, 1000).Group(),
+			kvWorkerPool:     pond.New(1, 1000).Group(),
 		}
 
 		for node := range nodes {
@@ -149,6 +149,10 @@ func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (retu
 				return 0, err
 			}
 		}
+
+		i.kvWorkerPool.Wait()
+		i.leafWorkerPool.Wait()
+		i.branchWorkerPool.Wait()
 
 		switch len(i.leavesStack) {
 		case 0:
@@ -169,9 +173,9 @@ type importer struct {
 	// keep track of the pending nodes
 	nodeStack []*MemNode
 
-	leafWorkerPool   *pond.WorkerPool
-	kvWorkerPool     *pond.WorkerPool
-	branchWorkerPool *pond.WorkerPool
+	leafWorkerPool   *pond.TaskGroup
+	kvWorkerPool     *pond.TaskGroup
+	branchWorkerPool *pond.TaskGroup
 }
 
 func (i *importer) Add(n *types.SnapshotNode) error {
