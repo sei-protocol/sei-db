@@ -369,6 +369,34 @@ func (s *StorageTestSuite) TestDatabaseIteratorMultiVersion() {
 	s.Require().NoError(itr.Error())
 }
 
+// Tests bug where iterator loops continuously
+func (s *StorageTestSuite) TestDatabaseIteratorLooping() {
+	db, err := s.NewDB(s.T().TempDir())
+	s.Require().NoError(err)
+	defer db.Close()
+
+	// Less than iterator version
+	s.Require().NoError(DBApplyChangeset(db, 58827506, storeKey1, [][]byte{[]byte("keyC")}, [][]byte{[]byte("value003")}))
+	// Both below are greater
+	s.Require().NoError(DBApplyChangeset(db, 58833605, storeKey1, [][]byte{[]byte("keyC")}, [][]byte{[]byte("value004")}))
+	s.Require().NoError(DBApplyChangeset(db, 58833606, storeKey1, [][]byte{[]byte("keyD")}, [][]byte{[]byte("value006")}))
+
+	itr, err := db.Iterator(storeKey1, 58831525, []byte("keyA"), nil)
+	s.Require().NoError(err)
+
+	defer itr.Close()
+
+	// All keys should be present; All odd keys should have a value that reflects
+	// version 49, and all even keys should have a value that reflects the desired
+	// version, 69.
+	count := 0
+	for ; itr.Valid(); itr.Next() {
+		count++
+	}
+
+	s.Require().Equal(1, count)
+}
+
 func (s *StorageTestSuite) TestDatabaseIteratorNoDomain() {
 	db, err := s.NewDB(s.T().TempDir())
 	s.Require().NoError(err)
