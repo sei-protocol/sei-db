@@ -265,14 +265,14 @@ func (t *Tree) Export() *Exporter {
 	return newExporter(func(callback func(node *types.SnapshotNode) bool) {
 		t.ScanPostOrder(func(node Node) bool {
 			startTime := time.Now()
-			snapshotNode := &types.SnapshotNode{
+			_ = &types.SnapshotNode{
 				Key:     node.Key(),
 				Value:   node.Value(),
 				Version: int64(node.Version()),
 				Height:  int8(node.Height()),
 			}
 			telemetry.MeasureSince(startTime, "memiavl", "exporter", "get_node")
-			return callback(snapshotNode)
+			return true
 		})
 	})
 }
