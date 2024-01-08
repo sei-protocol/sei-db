@@ -3,7 +3,9 @@ package memiavl
 import (
 	"bytes"
 	"crypto/sha256"
+	"github.com/cosmos/cosmos-sdk/telemetry"
 	"sort"
+	"time"
 
 	"github.com/sei-protocol/sei-db/common/utils"
 )
@@ -168,6 +170,8 @@ func (node PersistedNode) Mutate(version, _ uint32) *MemNode {
 
 func (node PersistedNode) Get(key []byte) ([]byte, uint32) {
 	var start, count uint32
+	startTime := time.Now()
+	defer telemetry.MeasureSince(startTime, "memiavl", "persistent-node", "get")
 	if node.isLeaf {
 		start = node.index
 		count = 1
