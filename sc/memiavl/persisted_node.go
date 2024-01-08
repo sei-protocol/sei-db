@@ -88,8 +88,6 @@ func (node PersistedNode) Size() int64 {
 }
 
 func (node PersistedNode) Key() []byte {
-	startTime := time.Now()
-	defer telemetry.MeasureSince(startTime, "memiavl", "persistent-node", "key")
 	if node.isLeaf {
 		return node.snapshot.LeafKey(node.index)
 	}
@@ -103,10 +101,7 @@ func (node PersistedNode) Value() []byte {
 	if !node.isLeaf {
 		return nil
 	}
-	startTime := time.Now()
 	_, value := node.snapshot.LeafKeyValue(node.index)
-	telemetry.MeasureSince(startTime, "memiavl", "persistent-node", "value")
-
 	return value
 }
 

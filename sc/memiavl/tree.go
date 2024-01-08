@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	ics23 "github.com/confio/ics23/go"
+	"github.com/cosmos/cosmos-sdk/telemetry"
 	"github.com/cosmos/iavl"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/sei-protocol/sei-db/common/utils"
@@ -12,6 +13,7 @@ import (
 	dbm "github.com/tendermint/tm-db"
 	"math"
 	"sync"
+	"time"
 )
 
 var _ types.Tree = (*Tree)(nil)
@@ -262,12 +264,15 @@ func (t *Tree) Export() *Exporter {
 	// do normal post-order traversal export
 	return newExporter(func(callback func(node *types.SnapshotNode) bool) {
 		t.ScanPostOrder(func(node Node) bool {
-			return callback(&types.SnapshotNode{
+			startTime := time.Now()
+			snapshotNode := &types.SnapshotNode{
 				Key:     node.Key(),
 				Value:   node.Value(),
 				Version: int64(node.Version()),
 				Height:  int8(node.Height()),
-			})
+			}
+			telemetry.MeasureSince(startTime, "memiavl", "exporter", "get_node")
+			return callback(snapshotNode)
 		})
 	})
 }
