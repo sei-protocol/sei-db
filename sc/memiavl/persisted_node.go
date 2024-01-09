@@ -3,6 +3,7 @@ package memiavl
 import (
 	"bytes"
 	"crypto/sha256"
+	"github.com/armon/go-metrics"
 	"github.com/cosmos/cosmos-sdk/telemetry"
 	"sort"
 	"time"
@@ -172,7 +173,12 @@ func (node PersistedNode) Mutate(version, _ uint32) *MemNode {
 func (node PersistedNode) Get(key []byte) ([]byte, uint32) {
 	var start, count uint32
 	startTime := time.Now()
-	defer telemetry.MeasureSince(startTime, "memiavl", "persistent-node", "get")
+	defer telemetry.MeasureSinceWithLabels([]string{"memiavl", "persistent-node", "get"}, startTime, []metrics.Label{
+		{
+			Name:  "module",
+			Value: node.snapshot.snapshotDir,
+		},
+	})
 	if node.isLeaf {
 		start = node.index
 		count = 1

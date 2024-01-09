@@ -31,9 +31,10 @@ const (
 // Snapshot manage the lifecycle of mmap-ed files for the snapshot,
 // it must out live the objects that derived from it.
 type Snapshot struct {
-	nodesMap  *MmapFile
-	leavesMap *MmapFile
-	kvsMap    *MmapFile
+	nodesMap    *MmapFile
+	leavesMap   *MmapFile
+	kvsMap      *MmapFile
+	snapshotDir string
 
 	nodes  []byte
 	leaves []byte
@@ -138,9 +139,10 @@ func OpenSnapshot(snapshotDir string) (*Snapshot, error) {
 	}
 
 	snapshot := &Snapshot{
-		nodesMap:  nodesMap,
-		leavesMap: leavesMap,
-		kvsMap:    kvsMap,
+		nodesMap:    nodesMap,
+		leavesMap:   leavesMap,
+		kvsMap:      kvsMap,
+		snapshotDir: snapshotDir,
 
 		// cache the pointers
 		nodes:  nodes,
