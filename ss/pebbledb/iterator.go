@@ -60,6 +60,7 @@ func newPebbleDBIterator(src *pebble.Iterator, prefix, mvccStart, mvccEnd []byte
 		reverse: reverse,
 	}
 
+	fmt.Printf("Iterator constructor")
 	if valid {
 		currKey, currKeyVersion, ok := SplitMVCCKey(itr.source.Key())
 		if !ok {
