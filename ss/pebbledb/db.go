@@ -192,6 +192,7 @@ func (db *Database) Get(storeKey string, targetVersion int64, key []byte) ([]byt
 			return nil, nil
 		}
 
+		fmt.Printf("DEBUG - pebbledb GET error storeKey %s targetVersion %d key %s\n", storeKey, targetVersion, string(key))
 		return nil, fmt.Errorf("failed to perform PebbleDB read: %w", err)
 	}
 
@@ -559,13 +560,14 @@ func getMVCCSlice(db *pebble.DB, storeKey string, key []byte, version int64) ([]
 		return nil, errorutils.ErrRecordNotFound
 	}
 
-	_, vBz, ok := SplitMVCCKey(itr.Key())
+	currKey, vBz, ok := SplitMVCCKey(itr.Key())
 	if !ok {
 		return nil, fmt.Errorf("invalid PebbleDB MVCC key: %s", itr.Key())
 	}
 
 	keyVersion, err := decodeUint64Ascending(vBz)
 	if err != nil {
+		fmt.Printf("DEBUG - pebbledb getMVCCSlice error storeKey %s key %s currKey %s full Key %s version %d vBz %s\n", storeKey, string(key), string(currKey), string(itr.Key()), version, string(vBz))
 		return nil, fmt.Errorf("failed to decode key version: %w", err)
 	}
 	if keyVersion > version {
