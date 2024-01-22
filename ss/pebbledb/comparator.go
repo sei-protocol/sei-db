@@ -209,6 +209,7 @@ func MVCCEncode(key []byte, version int64) (dst []byte) {
 	dst = append(dst, 0)
 
 	if version != 0 {
+		fmt.Printf("DEBUG - Version is 0 key %s\n", string(key))
 		extra := byte(1 + 8)
 		dst = encodeUint64Ascending(dst, uint64(version))
 		dst = append(dst, extra)
