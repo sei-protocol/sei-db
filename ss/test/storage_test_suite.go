@@ -1,14 +1,14 @@
 package sstest
 
 import (
-	"fmt"
 	"sync"
 
+	"github.com/cosmos/iavl"
+	"github.com/stretchr/testify/suite"
 	"golang.org/x/exp/slices"
 
-	"github.com/stretchr/testify/suite"
+	"fmt"
 
-	"github.com/cosmos/iavl"
 	"github.com/sei-protocol/sei-db/ss/types"
 )
 
@@ -367,6 +367,123 @@ func (s *StorageTestSuite) TestDatabaseIteratorMultiVersion() {
 	}
 	s.Require().Equal(10, count)
 	s.Require().NoError(itr.Error())
+}
+
+// Tests bug where iterator loops continuously
+func (s *StorageTestSuite) TestDatabaseBugInitialReverseIteration() {
+	db, err := s.NewDB(s.T().TempDir())
+	s.Require().NoError(err)
+	defer db.Close()
+
+	// Forward Iteration
+	// Less than iterator version
+	s.Require().NoError(DBApplyChangeset(db, 2, storeKey1, [][]byte{[]byte("keyA")}, [][]byte{[]byte("value001")}))
+	s.Require().NoError(DBApplyChangeset(db, 3, storeKey1, [][]byte{[]byte("keyB")}, [][]byte{[]byte("value002")}))
+	s.Require().NoError(DBApplyChangeset(db, 4, storeKey1, [][]byte{[]byte("keyC")}, [][]byte{[]byte("value003")}))
+
+	s.Require().NoError(DBApplyChangeset(db, 8, storeKey1, [][]byte{[]byte("keyD")}, [][]byte{[]byte("value007")}))
+	s.Require().NoError(DBApplyChangeset(db, 9, storeKey1, [][]byte{[]byte("keyE")}, [][]byte{[]byte("value008")}))
+	s.Require().NoError(DBApplyChangeset(db, 10, storeKey1, [][]byte{[]byte("keyF")}, [][]byte{[]byte("value009")}))
+	s.Require().NoError(DBApplyChangeset(db, 11, storeKey1, [][]byte{[]byte("keyH")}, [][]byte{[]byte("value010")}))
+
+	itr, err := db.ReverseIterator(storeKey1, 5, []byte("keyA"), nil)
+	s.Require().NoError(err)
+
+	defer itr.Close()
+
+	count := 0
+	for ; itr.Valid(); itr.Next() {
+		count++
+	}
+
+	s.Require().Equal(3, count)
+}
+
+func (s *StorageTestSuite) TestDatabaseBugInitialForwardIteration() {
+	db, err := s.NewDB(s.T().TempDir())
+	s.Require().NoError(err)
+	defer db.Close()
+
+	// Forward Iteration
+	// Less than iterator version
+	s.Require().NoError(DBApplyChangeset(db, 8, storeKey1, [][]byte{[]byte("keyA")}, [][]byte{[]byte("value001")}))
+	s.Require().NoError(DBApplyChangeset(db, 9, storeKey1, [][]byte{[]byte("keyB")}, [][]byte{[]byte("value002")}))
+	s.Require().NoError(DBApplyChangeset(db, 10, storeKey1, [][]byte{[]byte("keyC")}, [][]byte{[]byte("value003")}))
+	s.Require().NoError(DBApplyChangeset(db, 11, storeKey1, [][]byte{[]byte("keyD")}, [][]byte{[]byte("value004")}))
+
+	s.Require().NoError(DBApplyChangeset(db, 2, storeKey1, [][]byte{[]byte("keyD")}, [][]byte{[]byte("value007")}))
+	s.Require().NoError(DBApplyChangeset(db, 3, storeKey1, [][]byte{[]byte("keyE")}, [][]byte{[]byte("value008")}))
+	s.Require().NoError(DBApplyChangeset(db, 4, storeKey1, [][]byte{[]byte("keyF")}, [][]byte{[]byte("value009")}))
+	s.Require().NoError(DBApplyChangeset(db, 5, storeKey1, [][]byte{[]byte("keyH")}, [][]byte{[]byte("value010")}))
+
+	itr, err := db.Iterator(storeKey1, 6, nil, []byte("keyZ"))
+	s.Require().NoError(err)
+
+	defer itr.Close()
+
+	count := 0
+	for ; itr.Valid(); itr.Next() {
+		count++
+	}
+
+	s.Require().Equal(4, count)
+}
+
+func (s *StorageTestSuite) TestDatabaseBugInitialForwardIterationHigher() {
+	db, err := s.NewDB(s.T().TempDir())
+	s.Require().NoError(err)
+	defer db.Close()
+
+	// Less than iterator version
+	s.Require().NoError(DBApplyChangeset(db, 9, storeKey1, [][]byte{[]byte("keyB")}, [][]byte{[]byte("value002")}))
+	s.Require().NoError(DBApplyChangeset(db, 10, storeKey1, [][]byte{[]byte("keyC")}, [][]byte{[]byte("value003")}))
+	s.Require().NoError(DBApplyChangeset(db, 11, storeKey1, [][]byte{[]byte("keyD")}, [][]byte{[]byte("value004")}))
+
+	s.Require().NoError(DBApplyChangeset(db, 12, storeKey1, [][]byte{[]byte("keyD")}, [][]byte{[]byte("value007")}))
+	s.Require().NoError(DBApplyChangeset(db, 13, storeKey1, [][]byte{[]byte("keyE")}, [][]byte{[]byte("value008")}))
+	s.Require().NoError(DBApplyChangeset(db, 14, storeKey1, [][]byte{[]byte("keyF")}, [][]byte{[]byte("value009")}))
+	s.Require().NoError(DBApplyChangeset(db, 15, storeKey1, [][]byte{[]byte("keyH")}, [][]byte{[]byte("value010")}))
+
+	itr, err := db.Iterator(storeKey1, 6, nil, []byte("keyZ"))
+	s.Require().NoError(err)
+
+	defer itr.Close()
+
+	count := 0
+	for ; itr.Valid(); itr.Next() {
+		count++
+	}
+
+	s.Require().Equal(0, count)
+}
+
+func (s *StorageTestSuite) TestDatabaseBugInitialReverseIterationHigher() {
+	db, err := s.NewDB(s.T().TempDir())
+	s.Require().NoError(err)
+	defer db.Close()
+
+	// Reverse Iteration
+	// Less than iterator version
+	s.Require().NoError(DBApplyChangeset(db, 12, storeKey1, [][]byte{[]byte("keyB")}, [][]byte{[]byte("value001")}))
+	s.Require().NoError(DBApplyChangeset(db, 13, storeKey1, [][]byte{[]byte("keyC")}, [][]byte{[]byte("value002")}))
+	s.Require().NoError(DBApplyChangeset(db, 14, storeKey1, [][]byte{[]byte("keyD")}, [][]byte{[]byte("value003")}))
+
+	s.Require().NoError(DBApplyChangeset(db, 8, storeKey1, [][]byte{[]byte("keyE")}, [][]byte{[]byte("value007")}))
+	s.Require().NoError(DBApplyChangeset(db, 9, storeKey1, [][]byte{[]byte("keyF")}, [][]byte{[]byte("value008")}))
+	s.Require().NoError(DBApplyChangeset(db, 10, storeKey1, [][]byte{[]byte("keyG")}, [][]byte{[]byte("value009")}))
+	s.Require().NoError(DBApplyChangeset(db, 11, storeKey1, [][]byte{[]byte("keyH")}, [][]byte{[]byte("value010")}))
+
+	itr, err := db.ReverseIterator(storeKey1, 5, []byte("keyA"), nil)
+	s.Require().NoError(err)
+
+	defer itr.Close()
+
+	count := 0
+	for ; itr.Valid(); itr.Next() {
+		count++
+	}
+
+	s.Require().Equal(0, count)
 }
 
 func (s *StorageTestSuite) TestDatabaseIteratorNoDomain() {
