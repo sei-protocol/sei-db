@@ -41,7 +41,7 @@ func (b *Batch) Reset() {
 
 func (b *Batch) set(storeKey string, tombstone int64, key, value []byte) error {
 	if storeKey == "params" {
-		fmt.Printf("DEBUG - storeKey %s tombstone %d key %s value %s version %d\n", storeKey, tombstone, key, value, b.version)
+		fmt.Printf("DEBUG - storeKey %s tombstone %d key %X value %X version %d\n", storeKey, tombstone, key, value, b.version)
 	}
 	prefixedKey := MVCCEncode(prependStoreKey(storeKey, key), b.version)
 	prefixedVal := MVCCEncode(value, tombstone)

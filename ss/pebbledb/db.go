@@ -192,7 +192,7 @@ func (db *Database) Get(storeKey string, targetVersion int64, key []byte) ([]byt
 			return nil, nil
 		}
 
-		fmt.Printf("DEBUG - pebbledb GET error storeKey %s targetVersion %d key %s\n", storeKey, targetVersion, string(key))
+		fmt.Printf("DEBUG - pebbledb GET error storeKey %s targetVersion %d key %X\n", storeKey, targetVersion, key)
 		return nil, fmt.Errorf("failed to perform PebbleDB read: %w", err)
 	}
 
@@ -223,7 +223,7 @@ func (db *Database) Get(storeKey string, targetVersion int64, key []byte) ([]byt
 }
 
 func (db *Database) ApplyChangeset(version int64, cs *proto.NamedChangeSet) error {
-	fmt.Printf("DEBUG - ApplyChangeset version %d\n", version)
+	fmt.Printf("DEBUG - ApplyChangeset version %d cs Name %s\n", version, cs.Name)
 	b, err := NewBatch(db.storage, version)
 	if err != nil {
 		return err
@@ -567,7 +567,7 @@ func getMVCCSlice(db *pebble.DB, storeKey string, key []byte, version int64) ([]
 
 	keyVersion, err := decodeUint64Ascending(vBz)
 	if err != nil {
-		fmt.Printf("DEBUG - pebbledb getMVCCSlice error storeKey %s key %s currKey %s full Key %s version %d vBz %s\n", storeKey, string(key), string(currKey), string(itr.Key()), version, string(vBz))
+		fmt.Printf("DEBUG - pebbledb getMVCCSlice error storeKey %s key %X currKey %X full Key %X version %d vBz %X\n", storeKey, key, currKey, itr.Key(), version, vBz)
 		return nil, fmt.Errorf("failed to decode key version: %w", err)
 	}
 	if keyVersion > version {
