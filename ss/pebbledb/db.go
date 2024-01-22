@@ -223,6 +223,7 @@ func (db *Database) Get(storeKey string, targetVersion int64, key []byte) ([]byt
 }
 
 func (db *Database) ApplyChangeset(version int64, cs *proto.NamedChangeSet) error {
+	fmt.Printf("DEBUG - ApplyChangeset version %d\n", version)
 	b, err := NewBatch(db.storage, version)
 	if err != nil {
 		return err
