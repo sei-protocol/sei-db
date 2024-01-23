@@ -232,6 +232,10 @@ func encodeUint64Ascending(dst []byte, v uint64) []byte {
 // the input as a big-endian 8 byte uint64 representation. The decoded int64 is
 // returned.
 func decodeUint64Ascending(b []byte) (int64, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+
 	if len(b) < 8 {
 		return 0, fmt.Errorf("insufficient bytes to decode uint64 int value; expected 8; got %d", len(b))
 	}
