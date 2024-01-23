@@ -3,6 +3,7 @@ package pebbledb
 import (
 	"bytes"
 	"fmt"
+	"runtime"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/sei-protocol/sei-db/ss/types"
@@ -43,6 +44,20 @@ func newPebbleDBIterator(src *pebble.Iterator, prefix, mvccStart, mvccEnd []byte
 	}
 
 	fmt.Printf("DEBUG - newPebbleDBIterator - prefix %s mvccStart %X mvccEnd %s mvccStartString %s mvccEndString %s version %d reverse %+v\n", string(prefix), mvccStart, mvccEnd, string(mvccStart), string(mvccEnd), version, reverse)
+	pc := make([]uintptr, 10)   // at most 10 callers
+	n := runtime.Callers(2, pc) // skip Callers and newPebbleDBIterator itself
+	if n == 0 {
+		fmt.Println("DEBUG - No callers found")
+	} else {
+		frames := runtime.CallersFrames(pc[:n])
+		for {
+			frame, more := frames.Next()
+			fmt.Printf("DEBUG - newPebbleDBIterator - Called from %s, function %s, line %d\n", frame.File, frame.Function, frame.Line)
+			if !more {
+				break
+			}
+		}
+	}
 
 	// move the underlying PebbleDB iterator to the first key
 	var valid bool
