@@ -42,7 +42,7 @@ func newPebbleDBIterator(src *pebble.Iterator, prefix, mvccStart, mvccEnd []byte
 		}
 	}
 
-	fmt.Printf("DEBUG - newPebbleDBIterator - prefix %s mvccStart %X mvccEnd %s version %d reverse %+v\n", string(prefix), mvccStart, mvccEnd, version, reverse)
+	fmt.Printf("DEBUG - newPebbleDBIterator - prefix %s mvccStart %X mvccEnd %s mvccStartString %s mvccEndString %s version %d reverse %+v\n", string(prefix), mvccStart, mvccEnd, string(mvccStart), string(mvccEnd), version, reverse)
 
 	// move the underlying PebbleDB iterator to the first key
 	var valid bool
