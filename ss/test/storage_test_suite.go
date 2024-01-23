@@ -25,7 +25,7 @@ type StorageTestSuite struct {
 	SkipTests      []string
 }
 
-func (s *StorageTestSuite) TestDatabaseBug() {
+func (s *StorageTestSuite) TestDatabaseBugVersionZero() {
 	db, err := s.NewDB(s.T().TempDir())
 	s.Require().NoError(err)
 	defer db.Close()
