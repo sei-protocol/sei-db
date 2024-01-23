@@ -566,6 +566,7 @@ func getMVCCSlice(db *pebble.DB, storeKey string, key []byte, version int64) ([]
 
 	keyVersion, err := decodeUint64Ascending(vBz)
 	if err != nil {
+		fmt.Printf("storeKey %s key %X version %d keyString %s\n", storeKey, key, version, string(key))
 		return nil, fmt.Errorf("failed to decode key version: %w", err)
 	}
 	if keyVersion > version {
