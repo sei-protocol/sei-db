@@ -196,7 +196,6 @@ func (t *Tree) GetByIndex(index int64) ([]byte, []byte) {
 }
 
 func (t *Tree) Get(key []byte) []byte {
-	fmt.Printf("DEBUG sc tree - Get %s\n", string(key))
 	_, value := t.GetWithIndex(key)
 
 	return value

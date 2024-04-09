@@ -15,6 +15,7 @@ GetMembershipProof will produce a CommitmentProof that the given key (and querie
 If the key doesn't exist in the tree, this will return an error.
 */
 func (t *Tree) GetMembershipProof(key []byte) (*ics23.CommitmentProof, error) {
+	fmt.Printf("DEBUG - GetMembershipProof\n")
 	exist, err := t.createExistenceProof(key)
 	if err != nil {
 		return nil, err
@@ -39,6 +40,7 @@ GetNonMembershipProof will produce a CommitmentProof that the given key doesn't 
 If the key exists in the tree, this will return an error.
 */
 func (t *Tree) GetNonMembershipProof(key []byte) (*ics23.CommitmentProof, error) {
+	fmt.Printf("DEBUG - GetNonMembershipProof\n")
 	// idx is one node right of what we want....
 	var err error
 	idx, val := t.GetWithIndex(key)
