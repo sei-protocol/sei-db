@@ -34,9 +34,9 @@ type Options struct {
 }
 
 func (opts Options) Validate() error {
-	if opts.ReadOnly && opts.CreateIfMissing {
-		return errors.New("can't create db in read-only mode")
-	}
+	// if opts.ReadOnly && opts.CreateIfMissing {
+	// 	return errors.New("can't create db in read-only mode")
+	// }
 
 	if opts.ReadOnly && opts.LoadForOverwriting {
 		return errors.New("can't rollback db in read-only mode")
