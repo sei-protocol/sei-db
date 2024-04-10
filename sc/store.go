@@ -70,15 +70,18 @@ func (cs *CommitStore) Rollback(targetVersion int64) error {
 	return nil
 }
 
-func (cs *CommitStore) LoadVersion(targetVersion int64, createNew bool) (types.Committer, error) {
+func (cs *CommitStore) LoadVersion(targetVersion int64, copyExisting bool) (types.Committer, error) {
 	opts := cs.opts
-	opts.ReadOnly = createNew
-	fmt.Printf("DEBUG - LoadVersion opts %+v targetVersion %+v createNew %+v\n", opts, targetVersion, createNew)
+	opts.ReadOnly = copyExisting
+	if copyExisting {
+		opts.CreateIfMissing = false
+	}
+	fmt.Printf("DEBUG - LoadVersion opts %+v targetVersion %+v copyExisting %+v\n", opts, targetVersion, copyExisting)
 	db, err := memiavl.OpenDB(cs.logger, targetVersion, opts)
 	if err != nil {
 		return nil, err
 	}
-	if createNew {
+	if copyExisting {
 		return &CommitStore{
 			logger: cs.logger,
 			db:     db,
