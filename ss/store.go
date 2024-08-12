@@ -61,6 +61,7 @@ func NewStateStore(logger logger.Logger, homeDir string, ssConfig config.StateSt
 // RecoverStateStore will be called during initialization to recover the state from rlog
 func RecoverStateStore(logger logger.Logger, changelogPath string, stateStore types.StateStore) error {
 	ssLatestVersion, err := stateStore.GetLatestVersion()
+	logger.Info(fmt.Sprintf("[Debug] Recovering changelog %s with ss latest version %d", changelogPath, ssLatestVersion))
 	if err != nil {
 		return err
 	}
@@ -96,7 +97,7 @@ func RecoverStateStore(logger logger.Logger, changelogPath string, stateStore ty
 	}
 	// Replay from the offset where the offset where the version is larger than SS store latest version
 	targetStartOffset := curOffset
-	logger.Info(fmt.Sprintf("Start replaying changelog to recover StateStore from offset %d to %d", targetStartOffset, lastOffset))
+	logger.Info(fmt.Sprintf("[Debug] Start replaying changelog to recover StateStore from offset %d to %d", targetStartOffset, lastOffset))
 	if targetStartOffset < lastOffset {
 		return streamHandler.Replay(targetStartOffset, lastOffset, func(index uint64, entry proto.ChangelogEntry) error {
 			// commit to state store
