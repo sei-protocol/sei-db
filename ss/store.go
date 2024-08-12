@@ -87,6 +87,8 @@ func RecoverStateStore(logger logger.Logger, changelogPath string, stateStore ty
 	// Look backward to find where we should start replay from
 	curVersion := lastEntry.Version
 	curOffset := lastOffset
+	logger.Info(fmt.Sprintf("[Debug] Last entry version: %d, last offset: %d, ss latest version: %d", curVersion, curOffset, ssLatestVersion))
+
 	for curVersion > ssLatestVersion && curOffset > firstOffset {
 		curOffset--
 		curEntry, errRead := streamHandler.ReadAt(curOffset)
