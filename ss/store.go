@@ -47,6 +47,9 @@ func NewStateStore(logger logger.Logger, homeDir string, ssConfig config.StateSt
 	// Handle auto recovery for DB running with async mode
 	if ssConfig.DedicatedChangelog {
 		changelogPath := utils.GetChangelogPath(utils.GetStateStorePath(homeDir, ssConfig.Backend))
+		if ssConfig.DBDirectory != "" {
+			changelogPath = utils.GetChangelogPath(ssConfig.DBDirectory)
+		}
 		err := RecoverStateStore(logger, changelogPath, stateStore)
 		if err != nil {
 			return nil, err
