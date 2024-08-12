@@ -74,13 +74,12 @@ func RecoverStateStore(logger logger.Logger, changelogPath string, stateStore ty
 	}
 	firstOffset, errFirst := streamHandler.FirstOffset()
 	fmt.Printf("[Debug] First offset is %d\n", firstOffset)
-	if firstOffset <= 0 || errFirst != nil {
+	if errFirst != nil {
 		return err
 	}
 	lastOffset, errLast := streamHandler.LastOffset()
 	fmt.Printf("[Debug] Last offset is %d\n", lastOffset)
-
-	if lastOffset <= 0 || errLast != nil {
+	if errLast != nil {
 		return err
 	}
 	lastEntry, errRead := streamHandler.ReadAt(lastOffset)
