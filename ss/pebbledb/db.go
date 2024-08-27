@@ -549,33 +549,53 @@ func (db *Database) RawImport(ch <-chan types.RawSnapshotNode) error {
 		defer wg.Done()
 		batch, err := NewRawBatch(db.storage)
 		if err != nil {
+			fmt.Printf("Error creating new raw batch: %v\n", err)
 			panic(err)
 		}
 
 		var counter int
 		for entry := range ch {
+			startTime := time.Now()
+
 			err := batch.Set(entry.StoreKey, entry.Key, entry.Value, entry.Version)
 			if err != nil {
+				fmt.Printf("Error setting batch entry: %v\n", err)
 				panic(err)
 			}
 
+			elapsedTime := time.Since(startTime)
+			fmt.Printf("Time taken to set entry in batch: %v\n", elapsedTime)
+
 			counter++
 			if counter%ImportCommitBatchSize == 0 {
+				startTime = time.Now()
+
 				if err := batch.Write(); err != nil {
+					fmt.Printf("Error writing batch: %v\n", err)
 					panic(err)
 				}
 
+				elapsedTime = time.Since(startTime)
+				fmt.Printf("Time taken to write batch: %v\n", elapsedTime)
+
 				batch, err = NewRawBatch(db.storage)
 				if err != nil {
+					fmt.Printf("Error creating new raw batch after write: %v\n", err)
 					panic(err)
 				}
 			}
 		}
 
 		if batch.Size() > 0 {
+			startTime := time.Now()
+
 			if err := batch.Write(); err != nil {
+				fmt.Printf("Error writing final batch: %v\n", err)
 				panic(err)
 			}
+
+			elapsedTime := time.Since(startTime)
+			fmt.Printf("Time taken to write final batch: %v\n", elapsedTime)
 		}
 	}
 
