@@ -77,7 +77,7 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 		L0StopWritesThreshold:       1000,
 		LBaseMaxBytes:               64 << 20, // 64 MB
 		Levels:                      make([]pebble.LevelOptions, 7),
-		MaxConcurrentCompactions:    func() int { return 3 }, // TODO: Make Configurable
+		MaxConcurrentCompactions:    func() int { return 6 }, // TODO: Make Configurable
 		MemTableSize:                64 << 20,
 		MemTableStopWritesThreshold: 4,
 	}
