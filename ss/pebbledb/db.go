@@ -73,11 +73,11 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 		Cache:                       cache,
 		Comparer:                    MVCCComparer,
 		FormatMajorVersion:          pebble.FormatNewest,
-		L0CompactionThreshold:       2,
-		L0StopWritesThreshold:       1000,
-		LBaseMaxBytes:               64 << 20, // 64 MB
+		L0CompactionThreshold:       math.MaxInt32, // Effectively disable compaction
+		L0StopWritesThreshold:       math.MaxInt32, // Allow unlimited L0 files
+		LBaseMaxBytes:               64 << 20,      // 64 MB
 		Levels:                      make([]pebble.LevelOptions, 7),
-		MaxConcurrentCompactions:    func() int { return 6 }, // TODO: Make Configurable
+		MaxConcurrentCompactions:    func() int { return 0 }, // Disable compactions
 		MemTableSize:                64 << 20,
 		MemTableStopWritesThreshold: 4,
 	}
