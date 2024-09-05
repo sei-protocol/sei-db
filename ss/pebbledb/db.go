@@ -566,28 +566,39 @@ func (db *Database) RawImport(ch <-chan types.RawSnapshotNode) error {
 			fmt.Printf("Error creating new raw batch: %v\n", err)
 			panic(err)
 		}
-		defer batch.batch.Close() // Close the batch when the worker is done
 
 		var counter int
 		for entry := range ch {
+			// startTime := time.Now()
+
 			err := batch.Set(entry.StoreKey, entry.Key, entry.Value, entry.Version)
 			if err != nil {
 				fmt.Printf("Error setting batch entry: %v\n", err)
 				panic(err)
 			}
 
+			// elapsedTime := time.Since(startTime)
+			// fmt.Printf("Time taken to set entry in batch: %v\n", elapsedTime)
+
 			counter++
 			if counter%ImportCommitBatchSize == 0 {
 				startTime := time.Now()
+				// printGCMetrics("before write")
 
 				if err := batch.Write(); err != nil {
 					fmt.Printf("Error writing batch: %v\n", err)
 					panic(err)
 				}
+				// printGCMetrics("after write")
 
 				elapsedTime := time.Since(startTime)
 				fmt.Printf("Time taken to write batch: %v\n\n", elapsedTime)
 
+				batch, err = NewRawBatch(db.storage)
+				if err != nil {
+					fmt.Printf("Error creating new raw batch after write: %v\n", err)
+					panic(err)
+				}
 			}
 		}
 
