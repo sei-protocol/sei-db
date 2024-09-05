@@ -115,15 +115,18 @@ func (b *RawBatch) Write() (err error) {
 	}()
 
 	// Measure the time taken for batch commit
+	// TODO: log before and after batch commit
 	startTime := time.Now()
 	err = b.batch.Commit(defaultWriteOpts)
 	duration := time.Since(startTime)
 
 	// Log metrics if Commit takes longer than 100ms
-	if duration > 100*time.Millisecond {
-		fmt.Printf("METRICS Warning: Batch commit took %s", duration)
-		logMetrics(b.storage)
-	}
+	// if duration > 100*time.Millisecond {
+	// 	fmt.Printf("METRICS Warning: Batch commit took %s\n", duration)
+	// 	logMetrics(b.storage)
+	// }
+	fmt.Printf("METRICS Warning: Batch commit took %s\n", duration)
+	logMetrics(b.storage)
 
 	return err
 }
@@ -138,5 +141,5 @@ func logMetrics(db *pebble.DB) {
 	fmt.Printf("METRICS L0 Files: %d\n", metrics.Levels[0].NumFiles)
 	fmt.Printf("METRICS Compactions Count: %d\n", metrics.Compact.Count)
 	fmt.Printf("METRICS Pending compactions: %d\n", metrics.Compact.EstimatedDebt)
-
+	fmt.Printf("METRICS Disk usage : %d\n", metrics.DiskSpaceUsage())
 }

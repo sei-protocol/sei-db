@@ -578,7 +578,7 @@ func (db *Database) RawImport(ch <-chan types.RawSnapshotNode) error {
 				}
 
 				elapsedTime := time.Since(startTime)
-				fmt.Printf("Time taken to write batch: %v\n", elapsedTime)
+				fmt.Printf("Time taken to write batch: %v\n\n", elapsedTime)
 
 				batch, err = NewRawBatch(db.storage)
 				if err != nil {
