@@ -79,7 +79,6 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 		MaxConcurrentCompactions:    func() int { return 0 }, // Disable compactions
 		MemTableSize:                256 << 20,
 		MemTableStopWritesThreshold: 8,
-		DisableWAL:                  true,
 	}
 
 	for i := 0; i < len(opts.Levels); i++ {
