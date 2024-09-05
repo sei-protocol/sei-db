@@ -32,7 +32,7 @@ const (
 	tombstoneVal       = "TOMBSTONE"
 
 	// TODO: Make configurable
-	ImportCommitBatchSize = 1000
+	ImportCommitBatchSize = 10000
 	PruneCommitBatchSize  = 50
 )
 
