@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -582,17 +584,28 @@ func (db *Database) RawImport(ch <-chan types.RawSnapshotNode) error {
 
 			counter++
 			if counter%ImportCommitBatchSize == 0 {
-				startTime := time.Now()
 				// printGCMetrics("before write")
 
+				profFileName := fmt.Sprintf("cpu_batch_write_%d.prof", counter)
+				f, err := os.Create(profFileName)
+				if err != nil {
+					fmt.Printf("Could not create CPU profile: %v\n", err)
+				}
+				pprof.StartCPUProfile(f)
+
+				startTime := time.Now()
 				if err := batch.Write(); err != nil {
 					fmt.Printf("Error writing batch: %v\n", err)
 					panic(err)
 				}
+				elapsedTime := time.Since(startTime)
+
+				// Stop profiling after batch write
+				pprof.StopCPUProfile()
+				f.Close()
 				// printGCMetrics("after write")
 
-				elapsedTime := time.Since(startTime)
-				fmt.Printf("Time taken to write batch: %v\n\n", elapsedTime)
+				fmt.Printf("Time taken to write batch counter %d : %v\n\n", counter, elapsedTime)
 
 				batch, err = NewRawBatch(db.storage)
 				if err != nil {
