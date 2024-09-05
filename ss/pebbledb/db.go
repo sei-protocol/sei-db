@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/cockroachdb/pebble/bloom"
 	errorutils "github.com/sei-protocol/sei-db/common/errors"
 	"github.com/sei-protocol/sei-db/common/logger"
 	"github.com/sei-protocol/sei-db/common/utils"
@@ -78,18 +77,21 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 		LBaseMaxBytes:               64 << 20,      // 64 MB
 		Levels:                      make([]pebble.LevelOptions, 7),
 		MaxConcurrentCompactions:    func() int { return 0 }, // Disable compactions
-		MemTableSize:                64 << 20,
-		MemTableStopWritesThreshold: 4,
+		MemTableSize:                256 << 20,
+		MemTableStopWritesThreshold: 8,
 	}
 
 	for i := 0; i < len(opts.Levels); i++ {
 		l := &opts.Levels[i]
 		l.BlockSize = 32 << 10       // 32 KB
 		l.IndexBlockSize = 256 << 10 // 256 KB
-		l.FilterPolicy = bloom.FilterPolicy(10)
+		l.FilterPolicy = nil
 		l.FilterType = pebble.TableFilter
 		// TODO: Consider compression only for specific layers like bottommost
 		l.Compression = pebble.ZstdCompression
+		if i <= 4 {
+			l.Compression = pebble.NoCompression
+		}
 		if i > 0 {
 			l.TargetFileSize = opts.Levels[i-1].TargetFileSize * 2
 		}
@@ -97,7 +99,7 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 	}
 
 	opts.Levels[6].FilterPolicy = nil
-	opts.FlushSplitBytes = opts.Levels[0].TargetFileSize
+	opts.FlushSplitBytes = 16 << 20 // 16 MB flush split
 	opts = opts.EnsureDefaults()
 
 	db, err := pebble.Open(dataDir, opts)
