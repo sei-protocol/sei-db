@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -545,17 +544,17 @@ func (db *Database) Import(version int64, ch <-chan types.SnapshotNode) error {
 	return nil
 }
 
-func printGCMetrics(context string) {
-	var memStats runtime.MemStats
-	runtime.ReadMemStats(&memStats)
-	fmt.Printf("GC METRICS (%s):\n", context)
-	fmt.Printf("GC Count: %d\n", memStats.NumGC)
-	fmt.Printf("GC Pause Total: %d ns\n", memStats.PauseTotalNs)
-	fmt.Printf("Last GC Pause: %d ns\n", memStats.PauseNs[(memStats.NumGC+255)%256])
-	fmt.Printf("Heap Alloc: %d bytes\n", memStats.HeapAlloc)
-	fmt.Printf("Heap Objects: %d\n", memStats.HeapObjects)
-	fmt.Printf("Heap Sys: %d bytes\n", memStats.HeapSys)
-}
+// func printGCMetrics(context string) {
+// 	var memStats runtime.MemStats
+// 	runtime.ReadMemStats(&memStats)
+// 	fmt.Printf("GC METRICS (%s):\n", context)
+// 	fmt.Printf("GC Count: %d\n", memStats.NumGC)
+// 	fmt.Printf("GC Pause Total: %d ns\n", memStats.PauseTotalNs)
+// 	fmt.Printf("Last GC Pause: %d ns\n", memStats.PauseNs[(memStats.NumGC+255)%256])
+// 	fmt.Printf("Heap Alloc: %d bytes\n", memStats.HeapAlloc)
+// 	fmt.Printf("Heap Objects: %d\n", memStats.HeapObjects)
+// 	fmt.Printf("Heap Sys: %d bytes\n", memStats.HeapSys)
+// }
 
 func (db *Database) RawImport(ch <-chan types.RawSnapshotNode) error {
 	var wg sync.WaitGroup
@@ -567,39 +566,28 @@ func (db *Database) RawImport(ch <-chan types.RawSnapshotNode) error {
 			fmt.Printf("Error creating new raw batch: %v\n", err)
 			panic(err)
 		}
+		defer batch.batch.Close() // Close the batch when the worker is done
 
 		var counter int
 		for entry := range ch {
-			// startTime := time.Now()
-
 			err := batch.Set(entry.StoreKey, entry.Key, entry.Value, entry.Version)
 			if err != nil {
 				fmt.Printf("Error setting batch entry: %v\n", err)
 				panic(err)
 			}
 
-			// elapsedTime := time.Since(startTime)
-			// fmt.Printf("Time taken to set entry in batch: %v\n", elapsedTime)
-
 			counter++
 			if counter%ImportCommitBatchSize == 0 {
 				startTime := time.Now()
-				printGCMetrics("before write")
 
 				if err := batch.Write(); err != nil {
 					fmt.Printf("Error writing batch: %v\n", err)
 					panic(err)
 				}
-				printGCMetrics("after write")
 
 				elapsedTime := time.Since(startTime)
 				fmt.Printf("Time taken to write batch: %v\n\n", elapsedTime)
 
-				batch, err = NewRawBatch(db.storage)
-				if err != nil {
-					fmt.Printf("Error creating new raw batch after write: %v\n", err)
-					panic(err)
-				}
 			}
 		}
 
