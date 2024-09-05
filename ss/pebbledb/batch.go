@@ -110,26 +110,28 @@ func (b *RawBatch) Delete(storeKey string, key []byte, version int64) error {
 }
 
 func (b *RawBatch) Write() (err error) {
+	// Measure the total time taken for the entire Write function
+	totalStartTime := time.Now()
+
 	defer func() {
 		closeStartTime := time.Now()
 		closeErr := b.batch.Close()
 		closeDuration := time.Since(closeStartTime)
 		fmt.Printf("METRICS: Batch close took %s\n", closeDuration)
 		err = errors.Join(err, closeErr)
+
+		// Log the total time for Write
+		totalDuration := time.Since(totalStartTime)
+		fmt.Printf("METRICS: Total time taken for Write: %s\n", totalDuration)
 	}()
 
 	// Measure the time taken for batch commit
-	// TODO: log before and after batch commit
 	startTime := time.Now()
 	err = b.batch.Commit(defaultWriteOpts)
-	duration := time.Since(startTime)
+	commitDuration := time.Since(startTime)
 
-	// Log metrics if Commit takes longer than 100ms
-	// if duration > 100*time.Millisecond {
-	// 	fmt.Printf("METRICS Warning: Batch commit took %s\n", duration)
-	// 	logMetrics(b.storage)
-	// }
-	fmt.Printf("METRICS Warning: Batch commit took %s\n", duration)
+	// Log metrics if Commit takes longer than 100ms (optional)
+	fmt.Printf("METRICS Warning: Batch commit took %s\n", commitDuration)
 	logMetrics(b.storage)
 
 	return err
