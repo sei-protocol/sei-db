@@ -136,10 +136,16 @@ func logMetrics(db *pebble.DB) {
 
 	// Log some relevant metrics for diagnosis
 	fmt.Printf("METRICS Memtable Size: %d bytes\n", metrics.MemTable.Size)
+	fmt.Printf("METRICS Memtable Count: %d\n", metrics.MemTable.Count)
+	fmt.Printf("METRICS Memtable Zombie Size: %d bytes\n", metrics.MemTable.ZombieSize)
 	fmt.Printf("METRICS Flushes Count: %d\n", metrics.Flush.Count)
 	fmt.Printf("METRICS Flushes In Progress: %d\n", metrics.Flush.NumInProgress)
 	fmt.Printf("METRICS L0 Files: %d\n", metrics.Levels[0].NumFiles)
+	fmt.Printf("METRICS L0 Size: %d bytes\n", metrics.Levels[0].Size)
 	fmt.Printf("METRICS Compactions Count: %d\n", metrics.Compact.Count)
+	fmt.Printf("METRICS Compactions In Progress: %d\n", metrics.Compact.NumInProgress)
 	fmt.Printf("METRICS Pending compactions: %d\n", metrics.Compact.EstimatedDebt)
-	fmt.Printf("METRICS Disk usage : %d\n", metrics.DiskSpaceUsage())
+	fmt.Printf("METRICS Disk usage: %d bytes\n", metrics.DiskSpaceUsage())
+	fmt.Printf("METRICS Total Bytes Written: %d\n", metrics.WAL.BytesWritten)
+	fmt.Printf("METRICS Total Bytes Flushed Level 0: %d\n", metrics.Levels[0].BytesFlushed)
 }
