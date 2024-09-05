@@ -122,7 +122,7 @@ func (b *RawBatch) Write() (err error) {
 
 		// Log the total time for Write
 		totalDuration := time.Since(totalStartTime)
-		fmt.Printf("METRICS: Total time taken for Write: %s\n", totalDuration)
+		fmt.Printf("METRICS: Total time taken for Write: %v\n", totalDuration)
 	}()
 
 	// Measure the time taken for batch commit
