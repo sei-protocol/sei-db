@@ -111,7 +111,11 @@ func (b *RawBatch) Delete(storeKey string, key []byte, version int64) error {
 
 func (b *RawBatch) Write() (err error) {
 	defer func() {
-		err = errors.Join(err, b.batch.Close())
+		closeStartTime := time.Now()
+		closeErr := b.batch.Close()
+		closeDuration := time.Since(closeStartTime)
+		fmt.Printf("METRICS: Batch close took %s\n", closeDuration)
+		err = errors.Join(err, closeErr)
 	}()
 
 	// Measure the time taken for batch commit
