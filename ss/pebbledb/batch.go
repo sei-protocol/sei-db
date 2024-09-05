@@ -3,6 +3,7 @@ package pebbledb
 import (
 	"encoding/binary"
 	"fmt"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/sei-protocol/sei-db/common/errors"
@@ -113,5 +114,29 @@ func (b *RawBatch) Write() (err error) {
 		err = errors.Join(err, b.batch.Close())
 	}()
 
-	return b.batch.Commit(defaultWriteOpts)
+	// Measure the time taken for batch commit
+	startTime := time.Now()
+	err = b.batch.Commit(defaultWriteOpts)
+	duration := time.Since(startTime)
+
+	// Log metrics if Commit takes longer than 100ms
+	if duration > 100*time.Millisecond {
+		fmt.Printf("METRICS Warning: Batch commit took %s", duration)
+		logMetrics(b.storage)
+	}
+
+	return err
+}
+
+func logMetrics(db *pebble.DB) {
+	metrics := db.Metrics()
+
+	// Log some relevant metrics for diagnosis
+	fmt.Printf("METRICS Memtable Size: %d bytes\n", metrics.MemTable.Size)
+	fmt.Printf("METRICS Flushes Count: %d\n", metrics.Flush.Count)
+	fmt.Printf("METRICS Flushes In Progress: %d\n", metrics.Flush.NumInProgress)
+	fmt.Printf("METRICS L0 Files: %d\n", metrics.Levels[0].NumFiles)
+	fmt.Printf("METRICS Compactions Count: %d\n", metrics.Compact.Count)
+	fmt.Printf("METRICS Pending compactions: %d\n", metrics.Compact.EstimatedDebt)
+
 }
