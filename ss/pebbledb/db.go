@@ -796,15 +796,20 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 	for itr.First(); itr.Valid(); itr.Next() {
 		currKeyEncoded := itr.Key()
 
-		// Ignore metadata entry for version
+		// Ignore metadata entries
 		if bytes.Equal(currKeyEncoded, []byte(latestVersionKey)) || bytes.Equal(currKeyEncoded, []byte(earliestVersionKey)) {
 			continue
 		}
 
-		// Store current key and version
+		// Decode the current key and version
 		currKey, currVersion, currOK := SplitMVCCKey(currKeyEncoded)
 		if !currOK {
 			return false, fmt.Errorf("invalid MVCC key")
+		}
+
+		// Only iterate through the specified module
+		if storeKey != "" && !bytes.HasPrefix(currKey, storePrefix(storeKey)) {
+			break
 		}
 
 		currVersionDecoded, err := decodeUint64Ascending(currVersion)
@@ -822,11 +827,10 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 			return false, fmt.Errorf("invalid PebbleDB MVCC value: %s", currKey)
 		}
 
-		// Call callback fn
+		// Call the callback function
 		if fn(currKey, valBz, currVersionDecoded) {
 			return true, nil
 		}
-
 	}
 
 	return false, nil
