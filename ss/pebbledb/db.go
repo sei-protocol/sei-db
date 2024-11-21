@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -315,6 +314,7 @@ func (db *Database) Get(storeKey string, targetVersion int64, key []byte) ([]byt
 		return nil, nil
 	}
 
+	// Index into it
 	for i := len(db.dbs) - 1; i >= 0; i-- {
 		vdb := db.dbs[i]
 		if targetVersion < vdb.startVersion {
@@ -445,51 +445,21 @@ func (db *Database) writeAsyncInBackground() {
 // it has been updated. This occurs when that module's keys are updated in between pruning runs, the node after is restarted.
 // This is not a large issue given the next time that module is updated, it will be properly pruned thereafter.
 func (db *Database) Prune(version int64) error {
-	earliestVersion := version + 1
-
-	if earliestVersion > db.earliestVersion {
-		db.earliestVersion = earliestVersion
+	if len(db.dbs) != 0 {
+		return fmt.Errorf("Pruning not enabled when sharding by version")
 	}
 
-	var newDBs []*VersionedDB
-	for _, vdb := range db.dbs {
-		if vdb.endVersion <= earliestVersion {
-			// Close and delete the entire shard
-			err := vdb.db.Close()
-			if err != nil {
-				return err
-			}
-			dbDir := filepath.Join(db.dataDir, fmt.Sprintf("%d_%d", vdb.startVersion, vdb.endVersion))
-			err = os.RemoveAll(dbDir)
-			if err != nil {
-				return err
-			}
-			continue
-		} else if vdb.startVersion >= earliestVersion {
-			newDBs = append(newDBs, vdb)
-		} else {
-			// Partial overlap, prune keys in this shard
-			err := pruneVersionedDB(db, vdb, earliestVersion)
-			if err != nil {
-				return err
-			}
-			newDBs = append(newDBs, vdb)
-		}
-	}
+	// Only one shard when pruning enabled
+	database := db.dbs[0].db
+	earliestVersion := version + 1 // we increment by 1 to include the provided version
 
-	db.dbs = newDBs
-
-	return nil
-}
-
-func pruneVersionedDB(db *Database, vdb *VersionedDB, earliestVersion int64) error {
-	itr, err := vdb.db.NewIter(nil)
+	itr, err := database.NewIter(nil)
 	if err != nil {
 		return err
 	}
 	defer itr.Close()
 
-	batch := vdb.db.NewBatch()
+	batch := database.NewBatch()
 	defer batch.Close()
 
 	var (
@@ -516,7 +486,7 @@ func pruneVersionedDB(db *Database, vdb *VersionedDB, earliestVersion int64) err
 
 		storeKey, err := parseStoreKey(currKey)
 		if err != nil {
-			// This should never happen given we skip the metadata keys.
+			// XXX: This should never happen given we skip the metadata keys.
 			return err
 		}
 
@@ -539,7 +509,7 @@ func pruneVersionedDB(db *Database, vdb *VersionedDB, earliestVersion int64) err
 
 		// Seek to next key if we are at a version which is higher than prune height
 		// Do not seek to next key if KeepLastVersion is false and we need to delete the previous key in pruning
-		if currVersionDecoded > earliestVersion && (db.config.KeepLastVersion || prevVersionDecoded > earliestVersion) {
+		if currVersionDecoded > version && (db.config.KeepLastVersion || prevVersionDecoded > version) {
 			itr.NextPrefix()
 			continue
 		}
@@ -547,7 +517,7 @@ func pruneVersionedDB(db *Database, vdb *VersionedDB, earliestVersion int64) err
 		// Delete a key if another entry for that key exists at a larger version than original but leq to the prune height
 		// Also delete a key if it has been tombstoned and its version is leq to the prune height
 		// Also delete a key if KeepLastVersion is false and version is leq to the prune height
-		if prevVersionDecoded <= earliestVersion && (bytes.Equal(prevKey, currKey) || valTombstoned(prevValEncoded) || !db.config.KeepLastVersion) {
+		if prevVersionDecoded <= version && (bytes.Equal(prevKey, currKey) || valTombstoned(prevValEncoded) || !db.config.KeepLastVersion) {
 			err = batch.Delete(prevKeyEncoded, nil)
 			if err != nil {
 				return err
@@ -582,7 +552,7 @@ func pruneVersionedDB(db *Database, vdb *VersionedDB, earliestVersion int64) err
 		}
 	}
 
-	return nil
+	return db.SetEarliestVersion(earliestVersion)
 }
 
 func (db *Database) Iterator(storeKey string, version int64, start, end []byte) (types.DBIterator, error) {
@@ -606,7 +576,7 @@ func (db *Database) Iterator(storeKey string, version int64, start, end []byte) 
 		upperBound = MVCCEncode(prependStoreKey(storeKey, end), 0)
 	}
 
-	itr, err := vdb.storage.NewIter(&pebble.IterOptions{LowerBound: lowerBound, UpperBound: upperBound})
+	itr, err := vdb.db.NewIter(&pebble.IterOptions{LowerBound: lowerBound, UpperBound: upperBound})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PebbleDB iterator: %w", err)
 	}
@@ -698,12 +668,17 @@ func (db *Database) Import(version int64, ch <-chan types.SnapshotNode) error {
 }
 
 func (db *Database) getDBForVersion(version int64) (*VersionedDB, error) {
-	for _, vdb := range db.dbs {
-		if version >= vdb.startVersion && version < vdb.endVersion {
-			return vdb, nil
-		}
+	if len(db.dbs) == 0 {
+		return nil, fmt.Errorf("no database shards available")
 	}
-	return nil, fmt.Errorf("no database shard found for version %d", version)
+	if version < db.dbs[0].startVersion || version >= db.dbs[len(db.dbs)-1].endVersion {
+		return nil, fmt.Errorf("version %d is out of bounds", version)
+	}
+	index := int((version - db.dbs[0].startVersion) / db.config.VersionShardSize)
+	if index < 0 || index >= len(db.dbs) {
+		return nil, fmt.Errorf("no database shard found for version %d", version)
+	}
+	return db.dbs[index], nil
 }
 
 func (db *Database) getOrCreateDBForVersion(version int64) (*VersionedDB, error) {
@@ -725,6 +700,7 @@ func (db *Database) getOrCreateDBForVersion(version int64) (*VersionedDB, error)
 
 // TODO: Raw import update with separate db per version
 // Can't create a batch with multiple versions
+// Create wrapper around
 func (db *Database) RawImport(ch <-chan types.RawSnapshotNode) error {
 	var wg sync.WaitGroup
 
