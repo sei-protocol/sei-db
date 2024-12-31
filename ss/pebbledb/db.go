@@ -714,7 +714,7 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 			}
 
 			// Store current key and version
-			_, currVersion, currOK = SplitMVCCKey(currKeyEncoded)
+			currKey, currVersion, currOK = SplitMVCCKey(currKeyEncoded)
 			if !currOK {
 				return false, fmt.Errorf("invalid MVCC key")
 			}
@@ -725,6 +725,7 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 			}
 
 			if currVersionDecoded < 100214999 {
+				fmt.Printf("RawIterate - too small skipping currKey %s currVersionDecoded %d\n", string(currKey), currVersionDecoded)
 				itr.NextPrefix()
 				continue
 			}
@@ -732,6 +733,7 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 		}
 
 		if currVersionDecoded > 106789896 {
+			fmt.Printf("RawIterate - too large skipping currKey %s currVersionDecoded %d\n", string(currKey), currVersionDecoded)
 			itr.NextPrefix()
 			continue
 		}
