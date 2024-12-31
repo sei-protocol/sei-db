@@ -702,12 +702,15 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 			return false, err
 		}
 
-		if currVersionDecoded < 100215000 {
-			itr.SeekLT(MVCCEncode(currKey, 100215001))
-			if currVersionDecoded < 100215000 {
+		if currVersionDecoded < 100214999 {
+			itr.SeekLT(MVCCEncode(currKey, 100215000))
+
+			if currVersionDecoded < 100214999 {
 				itr.NextPrefix()
 				continue
 			}
+
+			continue
 		}
 
 		if currVersionDecoded > 106789896 {
