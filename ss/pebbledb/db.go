@@ -678,7 +678,7 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 	}
 	defer itr.Close()
 
-	for itr.First(); itr.Valid(); itr.Next() {
+	for itr.First(); itr.Valid(); {
 		currKeyEncoded := itr.Key()
 
 		// Ignore metadata entry for version
@@ -702,6 +702,19 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 			return false, err
 		}
 
+		if currVersionDecoded < 100215000 {
+			itr.SeekLT(MVCCEncode(currKey, 100215001))
+			if currVersionDecoded < 100215000 {
+				itr.NextPrefix()
+				continue
+			}
+		}
+
+		if currVersionDecoded > 106789896 {
+			itr.NextPrefix()
+			continue
+		}
+
 		// Decode the value
 		currValEncoded := itr.Value()
 		if valTombstoned(currValEncoded) {
@@ -716,6 +729,8 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 		if fn(currKey, valBz, currVersionDecoded) {
 			return true, nil
 		}
+
+		itr.Next()
 
 	}
 
