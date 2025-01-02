@@ -191,8 +191,11 @@ func (stream *Stream) Replay(start uint64, end uint64, processFn func(entry prot
 	entryChan := make(chan proto.ChangelogEntry, 1000)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
+	totalReadTime := int64(0)
+	totalProcessTime := int64(0)
 	go func() {
 		for i := start; i <= end; i++ {
+			startTime := time.Now()
 			var entry proto.ChangelogEntry
 			bz, err := stream.log.Read(i)
 			if err != nil {
@@ -201,6 +204,7 @@ func (stream *Stream) Replay(start uint64, end uint64, processFn func(entry prot
 			if err := entry.Unmarshal(bz); err != nil {
 				returnErr = fmt.Errorf("unmarshal rlog failed, %w", err)
 			}
+			totalReadTime += time.Since(startTime).Milliseconds()
 			entryChan <- entry
 		}
 		close(entryChan)
@@ -209,7 +213,9 @@ func (stream *Stream) Replay(start uint64, end uint64, processFn func(entry prot
 	go func() {
 		defer wg.Done()
 		for entry := range entryChan {
+			startTime := time.Now()
 			err := processFn(entry)
+			totalProcessTime += time.Since(startTime).Milliseconds()
 			count++
 			if count%1000 == 0 {
 				fmt.Printf("[Debug] Replayed %d entries\n", count)
