@@ -313,12 +313,6 @@ func (t *MultiTree) UpdateCommitInfo() {
 	t.lastCommitInfo = *t.buildCommitInfo(t.lastCommitInfo.Version)
 }
 
-// UpdateCommitInfoToVersion update lastCommitInfo based on current status of trees.
-// it's needed if `updateCommitInfo` is set to `false` in `ApplyChangeSet`.
-func (t *MultiTree) UpdateCommitInfoToVersion(version int64) {
-	t.lastCommitInfo = *t.buildCommitInfo(version)
-}
-
 // Catchup replay the new entries in the Rlog file on the tree to catch up to the target or latest version.
 func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersion int64) error {
 	lastIndex, err := stream.LastOffset()
@@ -350,16 +344,16 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 		if err := t.apply(entry); err != nil {
 			return fmt.Errorf("apply rlog entry failed, %w", err)
 		}
-		//if _, err := t.SaveVersion(false); err != nil {
-		//	return fmt.Errorf("replay changeset failed to save version, %w", err)
-		//}
+		if _, err := t.SaveVersion(false); err != nil {
+			return fmt.Errorf("replay changeset failed to save version, %w", err)
+		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
-	t.UpdateCommitInfoToVersion(endVersion)
+	t.UpdateCommitInfo()
 	return nil
 }
 
