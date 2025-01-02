@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	errorutils "github.com/sei-protocol/sei-db/common/errors"
@@ -185,26 +186,40 @@ func (stream *Stream) ReadAt(index uint64) (*proto.ChangelogEntry, error) {
 }
 
 // Replay will read the replay log and process each log entry with the provided function
-func (stream *Stream) Replay(start uint64, end uint64, processFn func(index uint64, entry proto.ChangelogEntry) error) error {
+func (stream *Stream) Replay(start uint64, end uint64, processFn func(entry proto.ChangelogEntry) error) (returnErr error) {
 	count := 0
-	for i := start; i <= end; i++ {
-		var entry proto.ChangelogEntry
-		bz, err := stream.log.Read(i)
-		if err != nil {
-			return fmt.Errorf("read log failed, %w", err)
+	entryChan := make(chan proto.ChangelogEntry, 1000)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		for i := start; i <= end; i++ {
+			var entry proto.ChangelogEntry
+			bz, err := stream.log.Read(i)
+			if err != nil {
+				returnErr = fmt.Errorf("read log failed, %w", err)
+			}
+			if err := entry.Unmarshal(bz); err != nil {
+				returnErr = fmt.Errorf("unmarshal rlog failed, %w", err)
+			}
+			entryChan <- entry
 		}
-		if err := entry.Unmarshal(bz); err != nil {
-			return fmt.Errorf("unmarshal rlog failed, %w", err)
+		close(entryChan)
+	}()
+
+	go func() {
+		defer wg.Done()
+		for entry := range entryChan {
+			err := processFn(entry)
+			count++
+			if count%1000 == 0 {
+				fmt.Printf("[Debug] Replayed %d entries\n", count)
+			}
+			if err != nil {
+				returnErr = err
+			}
 		}
-		err = processFn(i, entry)
-		count++
-		if count%1000 == 0 {
-			fmt.Printf("[Debug] Replayed %d entries\n", count)
-		}
-		if err != nil {
-			return err
-		}
-	}
+	}()
+	wg.Wait()
 	return nil
 }
 

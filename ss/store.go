@@ -102,7 +102,7 @@ func RecoverStateStore(logger logger.Logger, changelogPath string, stateStore ty
 	targetStartOffset := curOffset
 	logger.Info(fmt.Sprintf("Start replaying changelog to recover StateStore from offset %d to %d", targetStartOffset, lastOffset))
 	if targetStartOffset < lastOffset {
-		return streamHandler.Replay(targetStartOffset, lastOffset, func(index uint64, entry proto.ChangelogEntry) error {
+		return streamHandler.Replay(targetStartOffset, lastOffset, func(entry proto.ChangelogEntry) error {
 			// commit to state store
 			for _, cs := range entry.Changesets {
 				if err := stateStore.ApplyChangeset(entry.Version, cs); err != nil {

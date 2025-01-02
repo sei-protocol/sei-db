@@ -59,9 +59,9 @@ func TestOpenAndCorruptedTail(t *testing.T) {
 func TestReplay(t *testing.T) {
 	changelog := prepareTestData(t)
 	var total = 0
-	err := changelog.Replay(1, 2, func(index uint64, entry proto.ChangelogEntry) error {
+	err := changelog.Replay(1, 2, func(entry proto.ChangelogEntry) error {
 		total++
-		switch index {
+		switch total {
 		case 1:
 			require.Equal(t, "test", entry.Changesets[0].Name)
 			require.Equal(t, []byte("hello"), entry.Changesets[0].Changeset.Pairs[0].Key)
@@ -72,7 +72,7 @@ func TestReplay(t *testing.T) {
 			require.Equal(t, []byte("hello2"), entry.Changesets[0].Changeset.Pairs[1].Key)
 			require.Equal(t, []byte("world2"), entry.Changesets[0].Changeset.Pairs[1].Value)
 		default:
-			require.Fail(t, fmt.Sprintf("unexpected index %d", index))
+			require.Fail(t, fmt.Sprintf("unexpected index %d", total))
 		}
 		return nil
 	})
