@@ -226,6 +226,7 @@ func (stream *Stream) Replay(start uint64, end uint64, processFn func(entry prot
 		}
 	}()
 	wg.Wait()
+	fmt.Printf("[Debug] Finished replaying %d entries, total read time %d ms, total process time %d ms\n", count, totalReadTime, totalProcessTime)
 	return nil
 }
 
