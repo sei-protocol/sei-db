@@ -186,6 +186,7 @@ func (stream *Stream) ReadAt(index uint64) (*proto.ChangelogEntry, error) {
 
 // Replay will read the replay log and process each log entry with the provided function
 func (stream *Stream) Replay(start uint64, end uint64, processFn func(index uint64, entry proto.ChangelogEntry) error) error {
+	count := 0
 	for i := start; i <= end; i++ {
 		var entry proto.ChangelogEntry
 		bz, err := stream.log.Read(i)
@@ -196,6 +197,10 @@ func (stream *Stream) Replay(start uint64, end uint64, processFn func(index uint
 			return fmt.Errorf("unmarshal rlog failed, %w", err)
 		}
 		err = processFn(i, entry)
+		count++
+		if count%1000 == 0 {
+			fmt.Printf("[Debug] Replayed %d entries\n", count)
+		}
 		if err != nil {
 			return err
 		}
