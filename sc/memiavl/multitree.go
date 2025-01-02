@@ -340,7 +340,7 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 	}
 
 	fmt.Printf("[Debug] Replaying changelog from %d to %d\n", firstIndex, endIndex)
-	err = stream.Replay(firstIndex, endIndex, func(index uint64, entry proto.ChangelogEntry) error {
+	err = stream.Replay(firstIndex, endIndex, func(entry proto.ChangelogEntry) error {
 		if err := t.apply(entry); err != nil {
 			return fmt.Errorf("apply rlog entry failed, %w", err)
 		}

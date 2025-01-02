@@ -23,7 +23,7 @@ type Stream[T any] interface {
 	LastOffset() (offset uint64, err error)
 
 	// Replay will read the replay the log and process each entry with the provided function
-	Replay(start uint64, end uint64, processFn func(index uint64, entry T) error) error
+	Replay(start uint64, end uint64, processFn func(entry T) error) error
 
 	Close() error
 }
