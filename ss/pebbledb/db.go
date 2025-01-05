@@ -678,12 +678,11 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 	}
 	defer itr.Close()
 
-	for itr.First(); itr.Valid(); {
+	for itr.First(); itr.Valid(); itr.Next() {
 		currKeyEncoded := itr.Key()
 
 		// Ignore metadata entry for version
 		if bytes.Equal(currKeyEncoded, []byte(latestVersionKey)) || bytes.Equal(currKeyEncoded, []byte(earliestVersionKey)) {
-			itr.Next()
 			continue
 		}
 
@@ -703,43 +702,9 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 			return false, err
 		}
 
-		if currVersionDecoded < 100214999 {
-			itr.SeekLT(MVCCEncode(currKey, 100215000))
-
-			currKeyEncoded := itr.Key()
-
-			if bytes.Equal(currKeyEncoded, []byte(latestVersionKey)) || bytes.Equal(currKeyEncoded, []byte(earliestVersionKey)) {
-				itr.Next()
-				continue
-			}
-
-			// Store current key and version
-			currKey, currVersion, currOK = SplitMVCCKey(currKeyEncoded)
-			if !currOK {
-				return false, fmt.Errorf("invalid MVCC key")
-			}
-
-			currVersionDecoded, err := decodeUint64Ascending(currVersion)
-			if err != nil {
-				return false, err
-			}
-
-			if currVersionDecoded < 100214999 {
-				itr.NextPrefix()
-				continue
-			}
-
-		}
-
-		if currVersionDecoded > 106789896 {
-			itr.NextPrefix()
-			continue
-		}
-
 		// Decode the value
 		currValEncoded := itr.Value()
 		if valTombstoned(currValEncoded) {
-			itr.Next()
 			continue
 		}
 		valBz, _, ok := SplitMVCCKey(currValEncoded)
@@ -751,8 +716,6 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 		if fn(currKey, valBz, currVersionDecoded) {
 			return true, nil
 		}
-
-		itr.Next()
 
 	}
 
