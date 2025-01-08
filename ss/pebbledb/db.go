@@ -163,6 +163,16 @@ func (db *Database) SetLatestVersion(version int64) error {
 	return err
 }
 
+func (db *Database) Set(storeKey string, key, value []byte, version int64) error {
+	prefixedKey := MVCCEncode(prependStoreKey(storeKey, key), version)
+	prefixedVal := MVCCEncode(value, 0)
+
+	if err := db.storage.Set(prefixedKey, prefixedVal, nil); err != nil {
+		return fmt.Errorf("failed to write PebbleDB: %w", err)
+	}
+	return nil
+}
+
 func (db *Database) GetLatestVersion() (int64, error) {
 	bz, closer, err := db.storage.Get([]byte(latestVersionKey))
 	if err != nil {

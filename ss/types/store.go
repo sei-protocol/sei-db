@@ -10,6 +10,7 @@ import (
 // which allows efficient reads, writes, iteration over a specific version
 type StateStore interface {
 	Get(storeKey string, version int64, key []byte) ([]byte, error)
+	Set(storeKey string, key, value []byte, version int64) error
 	Has(storeKey string, version int64, key []byte) (bool, error)
 	Iterator(storeKey string, version int64, start, end []byte) (DBIterator, error)
 	ReverseIterator(storeKey string, version int64, start, end []byte) (DBIterator, error)
