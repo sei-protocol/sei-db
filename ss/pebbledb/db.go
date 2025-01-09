@@ -729,14 +729,15 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 			return false, fmt.Errorf("invalid PebbleDB MVCC value: %s", currKey)
 		}
 
+		catchupCounter++
+		if catchupCounter%1_000_000 == 0 {
+			fmt.Printf("[%s] Caught up %d distribution keys\n",
+				time.Now().Format(time.RFC3339), catchupCounter,
+			)
+		}
+
 		// Call callback fn
 		if fn(currKey, valBz, currVersionDecoded) {
-			catchupCounter++
-			if catchupCounter%1_000_000 == 0 {
-				fmt.Printf("[%s] Caught up %d distribution keys\n",
-					time.Now().Format(time.RFC3339), catchupCounter,
-				)
-			}
 			return true, nil
 		}
 
