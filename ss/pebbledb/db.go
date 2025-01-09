@@ -712,6 +712,12 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 			return false, err
 		}
 
+		// Skip to next prefix if version is >= 121234732
+		if currVersionDecoded >= 121234732 {
+			itr.NextPrefix()
+			continue
+		}
+
 		// Decode the value
 		currValEncoded := itr.Value()
 		if valTombstoned(currValEncoded) {
