@@ -715,6 +715,7 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 
 		// Skip to next prefix if version is >= 121234732
 		if currVersionDecoded >= 121234732 && catchupCounter >= 475000000 {
+			catchupCounter++
 			fmt.Printf("[%s] Skipping prefix %d distribution keys\n",
 				time.Now().Format(time.RFC3339), catchupCounter,
 			)
@@ -740,6 +741,9 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 		}
 
 		// Call callback fn
+		fmt.Printf("[%s] Callback Caught up %d \n",
+			time.Now().Format(time.RFC3339), catchupCounter,
+		)
 		if fn(currKey, valBz, currVersionDecoded) {
 			return true, nil
 		}
