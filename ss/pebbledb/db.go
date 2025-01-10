@@ -688,8 +688,6 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 	}
 	defer itr.Close()
 
-	var catchupCounter int
-	var skipCounter int
 	for itr.First(); itr.Valid(); itr.Next() {
 		currKeyEncoded := itr.Key()
 
@@ -714,14 +712,6 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 			return false, err
 		}
 
-		// Skip to next prefix if version is >= 121234732
-		if currVersionDecoded >= 121234732 && catchupCounter >= 475000000 {
-			catchupCounter++
-			skipCounter++
-			itr.NextPrefix()
-			continue
-		}
-
 		// Decode the value
 		currValEncoded := itr.Value()
 		if valTombstoned(currValEncoded) {
@@ -730,13 +720,6 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 		valBz, _, ok := SplitMVCCKey(currValEncoded)
 		if !ok {
 			return false, fmt.Errorf("invalid PebbleDB MVCC value: %s", currKey)
-		}
-
-		catchupCounter++
-		if catchupCounter%1_000_000 == 0 {
-			fmt.Printf("[%s] Caught up %d distribution keys, skipped %d\n",
-				time.Now().Format(time.RFC3339), catchupCounter, skipCounter,
-			)
 		}
 
 		if fn(currKey, valBz, currVersionDecoded) {
