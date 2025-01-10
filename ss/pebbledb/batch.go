@@ -63,7 +63,7 @@ func (b *Batch) Write() (err error) {
 		err = errors.Join(err, b.batch.Close())
 	}()
 
-	return b.batch.Commit(defaultWriteOpts)
+	return b.batch.Commit(syncWriteOpts)
 }
 
 // For writing kv pairs in any order of version
@@ -113,5 +113,5 @@ func (b *RawBatch) Write() (err error) {
 		err = errors.Join(err, b.batch.Close())
 	}()
 
-	return b.batch.Commit(defaultWriteOpts)
+	return b.batch.Commit(syncWriteOpts)
 }
