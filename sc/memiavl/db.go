@@ -583,7 +583,9 @@ func (db *DB) rewriteSnapshotBackground() error {
 	db.snapshotRewriteChan = ch
 	db.snapshotRewriteCancelFunc = cancel
 
+	fmt.Println("[Debug] Starting rewrite snapshot clone")
 	cloned := db.copy(0)
+	fmt.Println("[Debug] rewrite snapshot done")
 	go func() {
 		defer close(ch)
 
