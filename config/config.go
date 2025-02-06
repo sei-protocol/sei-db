@@ -87,6 +87,9 @@ type StateStoreConfig struct {
 	// Whether to keep last version of a key during pruning or delete
 	// defaults to true
 	KeepLastVersion bool `mapstructure:"keep-last-version"`
+
+	// Number of versions per shard
+	VersionShardSize int64 `mapstructure:"version-shard-size"`
 }
 
 func DefaultStateCommitConfig() StateCommitConfig {
