@@ -252,7 +252,7 @@ func open(dir string, opts *wal.Options) (*wal.Log, error) {
 		}
 
 		if len(lastSeg) == 0 {
-			return nil, err
+			return nil, fmt.Errorf("no valid segments in %s: %w", dir, err)
 		}
 		if err = truncateCorruptedTail(filepath.Join(dir, lastSeg), opts.LogFormat); err != nil {
 			return nil, fmt.Errorf("truncate corrupted tail fail: %w", err)
