@@ -231,6 +231,10 @@ func (stream *Stream) Close() error {
 
 // open opens the replay log, try to truncate the corrupted tail if there's any
 func open(dir string, opts *wal.Options) (*wal.Log, error) {
+	// if opts is nil, use the default options
+	if opts == nil {
+		opts = &wal.Options{}
+	}
 	rlog, err := wal.Open(dir, opts)
 	if errors.Is(err, wal.ErrCorrupt) {
 		// try to truncate corrupted tail
