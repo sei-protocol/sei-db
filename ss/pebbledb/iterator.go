@@ -26,6 +26,7 @@ type iterator struct {
 	version            int64
 	valid              bool
 	reverse            bool
+	recursionDepth     int
 }
 
 func newPebbleDBIterator(src *pebble.Iterator, prefix, mvccStart, mvccEnd []byte, version int64, earliestVersion int64, reverse bool) *iterator {
@@ -136,12 +137,15 @@ func (itr *iterator) nextForward() {
 		return
 	}
 
-	currKey, _, ok := SplitMVCCKey(itr.source.Key())
+	currKey, currVerBz, ok := SplitMVCCKey(itr.source.Key())
 	if !ok {
 		// XXX: This should not happen as that would indicate we have a malformed
 		// MVCC key.
 		panic(fmt.Sprintf("invalid PebbleDB MVCC key: %s", itr.source.Key()))
 	}
+
+	currVer, _ := decodeUint64Ascending(currVerBz)
+	fmt.Printf("DEBUG nextForward START: key=%s ver=%d target_ver=%d\n", currKey, currVer, itr.version)
 
 	next := itr.source.NextPrefix()
 
@@ -149,13 +153,17 @@ func (itr *iterator) nextForward() {
 	// desired version for that key, e.g. if the key was written at a later version,
 	// so we seek back to the latest desired version, s.t. the version is <= itr.version.
 	if next {
-		nextKey, _, ok := SplitMVCCKey(itr.source.Key())
+		nextKey, nextVerBz, ok := SplitMVCCKey(itr.source.Key())
 		if !ok {
 			// XXX: This should not happen as that would indicate we have a malformed
 			// MVCC key.
 			itr.valid = false
 			return
 		}
+
+		nextVer, _ := decodeUint64Ascending(nextVerBz)
+		fmt.Printf("DEBUG nextForward NEXT: key=%s ver=%d target_ver=%d\n", nextKey, nextVer, itr.version)
+
 		if !bytes.HasPrefix(nextKey, itr.prefix) {
 			// the next key must have itr.prefix as the prefix
 			itr.valid = false
@@ -174,10 +182,19 @@ func (itr *iterator) nextForward() {
 			return
 		}
 
+		fmt.Printf("DEBUG nextForward AFTER SEEK: key=%s original_key=%s\n", tmpKey, currKey)
+
 		// There exists cases where the SeekLT() call moved us back to the same key
 		// we started at, so we must move to next key, i.e. two keys forward.
 		if bytes.Equal(tmpKey, currKey) {
+			fmt.Printf("DEBUG nextForward SAME KEY: must move forward\n")
 			if itr.source.NextPrefix() {
+				// Track recursion depth
+				itr.recursionDepth++
+
+				fmt.Printf("DEBUG nextForward RECURSE(1): depth=%d key=%s\n",
+					itr.recursionDepth, tmpKey)
+
 				itr.nextForward()
 
 				_, tmpKeyVersion, ok = SplitMVCCKey(itr.source.Key())
@@ -202,14 +219,28 @@ func (itr *iterator) nextForward() {
 			return
 		}
 
+		fmt.Printf("DEBUG nextForward CHECK: key=%s ver=%d target_ver=%d recursive=%v\n",
+			tmpKey, tmpKeyVersionDecoded, itr.version, tmpKeyVersionDecoded > itr.version)
+
 		// If iterator is at a entry whose version is higher than requested version, call nextForward again
 		if tmpKeyVersionDecoded > itr.version {
+			// Track recursion depth
+			itr.recursionDepth++
+
+			fmt.Printf("DEBUG nextForward RECURSE(2): depth=%d key=%s ver=%d target_ver=%d\n",
+				itr.recursionDepth, tmpKey, tmpKeyVersionDecoded, itr.version)
+
 			itr.nextForward()
 		}
 
 		// The cursor might now be pointing at a key/value pair that is tombstoned.
 		// If so, we must move the cursor.
 		if itr.valid && itr.cursorTombstoned() {
+			fmt.Printf("DEBUG nextForward TOMBSTONE: moving to next\n")
+
+			// Track recursion depth
+			itr.recursionDepth++
+
 			itr.nextForward()
 		}
 
@@ -225,12 +256,15 @@ func (itr *iterator) nextReverse() {
 		return
 	}
 
-	currKey, _, ok := SplitMVCCKey(itr.source.Key())
+	currKey, currVerBz, ok := SplitMVCCKey(itr.source.Key())
 	if !ok {
 		// XXX: This should not happen as that would indicate we have a malformed
 		// MVCC key.
 		panic(fmt.Sprintf("invalid PebbleDB MVCC key: %s", itr.source.Key()))
 	}
+
+	currVer, _ := decodeUint64Ascending(currVerBz)
+	fmt.Printf("DEBUG nextReverse START: key=%s ver=%d target_ver=%d\n", currKey, currVer, itr.version)
 
 	next := itr.source.SeekLT(MVCCEncode(currKey, 0))
 
@@ -238,13 +272,16 @@ func (itr *iterator) nextReverse() {
 	// desired version for that key, e.g. if the key was written at a later version,
 	// so we seek back to the latest desired version, s.t. the version is <= itr.version.
 	if next {
-		nextKey, _, ok := SplitMVCCKey(itr.source.Key())
+		nextKey, nextVerBz, ok := SplitMVCCKey(itr.source.Key())
 		if !ok {
 			// XXX: This should not happen as that would indicate we have a malformed
 			// MVCC key.
 			itr.valid = false
 			return
 		}
+		nextVer, _ := decodeUint64Ascending(nextVerBz)
+		fmt.Printf("DEBUG nextReverse NEXT: key=%s ver=%d target_ver=%d\n", nextKey, nextVer, itr.version)
+
 		if !bytes.HasPrefix(nextKey, itr.prefix) {
 			// the next key must have itr.prefix as the prefix
 			itr.valid = false
@@ -255,7 +292,7 @@ func (itr *iterator) nextReverse() {
 		// append the current iterator key to the prefix and seek to that key.
 		itr.valid = itr.source.SeekLT(MVCCEncode(nextKey, itr.version+1))
 
-		_, tmpKeyVersion, ok := SplitMVCCKey(itr.source.Key())
+		tmpKey, tmpKeyVersion, ok := SplitMVCCKey(itr.source.Key())
 		if !ok {
 			// XXX: This should not happen as that would indicate we have a malformed
 			// MVCC key.
@@ -271,8 +308,17 @@ func (itr *iterator) nextReverse() {
 			return
 		}
 
+		fmt.Printf("DEBUG nextReverse CHECK: key=%s ver=%d target_ver=%d recursive=%v\n",
+			tmpKey, tmpKeyVersionDecoded, itr.version, tmpKeyVersionDecoded > itr.version)
+
 		// If iterator is at a entry whose version is higher than requested version, call nextReverse again
 		if tmpKeyVersionDecoded > itr.version {
+			// Add counter to track recursion depth
+			itr.recursionDepth++
+
+			fmt.Printf("DEBUG nextReverse RECURSE: depth=%d key=%s ver=%d target_ver=%d\n",
+				itr.recursionDepth, tmpKey, tmpKeyVersionDecoded, itr.version)
+
 			itr.nextReverse()
 		}
 
