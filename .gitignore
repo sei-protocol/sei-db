@@ -24,3 +24,5 @@
 *.pyc
 .dccache
 .idea
+
+.vscode/settings.json
