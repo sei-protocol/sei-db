@@ -61,12 +61,12 @@ func newPebbleDBIterator(src *pebble.Iterator, prefix, mvccStart, mvccEnd []byte
 			// XXX: This should not happen as that would indicate we have a malformed MVCC key.
 			panic(fmt.Sprintf("invalid PebbleDB MVCC key: %s", itr.source.Key()))
 		}
-
 		curKeyVersionDecoded, err := decodeUint64Ascending(currKeyVersion)
 		if err != nil {
 			itr.valid = false
 			return itr
 		}
+		fmt.Printf("[Debug] Intialize iterator with currKey %X, version %d\n", currKey, curKeyVersionDecoded)
 
 		// We need to check whether initial key iterator visits has a version <= requested version
 		// If larger version, call next to find another key which does

@@ -694,13 +694,6 @@ func (db *Database) ReverseIterator(storeKey string, version int64, start, end [
 	} else {
 		upperBound = MVCCEncode(prefixEnd(storePrefix(storeKey)), version+1)
 	}
-	// key2
-	// s/k:oracle/key1_98350314
-	// s/k:oracle/key1_98350315
-	// s/k:oracle/key1_98350316
-	// ...
-	// s/k:oracle/key1_146607775
-	// s/k:oracle/key1_146607777
 
 	itr, err := db.storage.NewIter(&pebble.IterOptions{LowerBound: lowerBound, UpperBound: upperBound})
 	if err != nil {
