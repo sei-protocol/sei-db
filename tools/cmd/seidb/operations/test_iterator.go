@@ -45,7 +45,7 @@ func IterateDbData(homeDir string, start string, end string) {
 		fmt.Printf("key: %X, value %X\n", forwardIter.Key(), forwardIter.Value())
 	}
 	forwardIter.Close()
-
+	fmt.Printf("Finished forward iteration\n")
 	fmt.Printf("Start reverse iteration\n")
 	startPos, _ := hex.DecodeString(start)
 	endPos, _ := hex.DecodeString(end)
