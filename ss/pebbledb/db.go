@@ -699,6 +699,11 @@ func (db *Database) ReverseIterator(storeKey string, version int64, start, end [
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PebbleDB iterator: %w", err)
 	}
+	valid := itr.SeekLT(upperBound)
+	if !valid {
+		fmt.Printf("Invalid reverse iterator\n")
+		return nil, errors.New("invalid range")
+	}
 
 	return newPebbleDBIterator(itr, storePrefix(storeKey), start, end, version, db.earliestVersion, true), nil
 }

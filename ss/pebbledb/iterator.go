@@ -42,14 +42,9 @@ func newPebbleDBIterator(src *pebble.Iterator, prefix, mvccStart, mvccEnd []byte
 		}
 	}
 
-	// move the underlying PebbleDB iterator to the first key
-	var valid bool
-	if reverse {
-		valid = src.Prev()
-	} else {
-		valid = src.Next()
-	}
+	valid := true
 
+	// move the underlying PebbleDB iterator to the first key
 	itr := &iterator{
 		source:  src,
 		prefix:  prefix,
