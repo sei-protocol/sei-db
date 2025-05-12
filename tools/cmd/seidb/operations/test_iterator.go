@@ -1,6 +1,7 @@
 package operations
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	"github.com/sei-protocol/sei-db/common/logger"
@@ -33,13 +34,15 @@ func IterateDbData(homeDir string) {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("Start iteration")
-	iter, err := ssStore.ReverseIterator("oracle", 98350313, []byte("07"), []byte("08"))
+	fmt.Printf("Start iteration\n")
+	start, _ := hex.DecodeString("07")
+	end, _ := hex.DecodeString("08")
+	iter, err := ssStore.ReverseIterator("oracle", 98350313, start, end)
 	if err != nil {
 		panic(err)
 	}
 	for ; iter.Valid(); iter.Next() {
 		fmt.Printf("key: %X, value %X\n", iter.Key(), iter.Value())
 	}
-	fmt.Printf("Complete iteration")
+	fmt.Printf("Complete iteration\n")
 }
