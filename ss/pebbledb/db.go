@@ -690,9 +690,9 @@ func (db *Database) ReverseIterator(storeKey string, version int64, start, end [
 
 	var upperBound []byte
 	if end != nil {
-		upperBound = MVCCEncode(prependStoreKey(storeKey, end), 0)
+		upperBound = MVCCEncode(prependStoreKey(storeKey, end), version+1)
 	} else {
-		upperBound = MVCCEncode(prefixEnd(storePrefix(storeKey)), 0)
+		upperBound = MVCCEncode(prefixEnd(storePrefix(storeKey)), version+1)
 	}
 
 	itr, err := db.storage.NewIter(&pebble.IterOptions{LowerBound: lowerBound, UpperBound: upperBound})
