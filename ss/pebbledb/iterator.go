@@ -253,13 +253,13 @@ func (itr *iterator) nextReverse() {
 	if !ok {
 		// XXX: This should not happen as that would indicate we have a malformed
 		// MVCC key.
-		panic(fmt.Sprintf("invalid PebbleDB MVCC key: %s", itr.source.Key()))
+		panic(fmt.Sprintf("invalid PebbleDB MVCC key: %X", itr.source.Key()))
 	}
 	currKeyVersion, _ := decodeUint64Ascending(currKeyVersionBz) // Assuming decode won't fail here
-	fmt.Printf("nextReverse: currKey=%s, currKeyVersion=%d\n", string(currKey), currKeyVersion)
+	fmt.Printf("nextReverse: currKey=%X, currKeyVersion=%d\n", currKey, currKeyVersion)
 
 	seekTarget := MVCCEncode(currKey, 0)
-	fmt.Printf("nextReverse: seeking LT %s (key=%s, version=0)\n", string(seekTarget), string(currKey))
+	fmt.Printf("nextReverse: seeking LT %s (key=%X, version=0)\n", string(seekTarget), currKey)
 	next := itr.source.SeekLT(seekTarget)
 
 	// First move the iterator to the next prefix, which may not correspond to the
@@ -274,11 +274,11 @@ func (itr *iterator) nextReverse() {
 			return
 		}
 		nextKeyVersion, _ := decodeUint64Ascending(nextKeyVersionBz) // Assuming decode won't fail here
-		fmt.Printf("nextReverse: SeekLT(currKey, 0) moved to nextKey=%s, nextKeyVersion=%d\n", string(nextKey), nextKeyVersion)
+		fmt.Printf("nextReverse: SeekLT(currKey, 0) moved to nextKey=%X, nextKeyVersion=%d\n", nextKey, nextKeyVersion)
 
 		if !bytes.HasPrefix(nextKey, itr.prefix) {
 			// the next key must have itr.prefix as the prefix
-			fmt.Printf("nextReverse: nextKey %s does not have prefix %s\n", string(nextKey), string(itr.prefix))
+			fmt.Printf("nextReverse: nextKey %X does not have prefix %s\n", nextKey, string(itr.prefix))
 			itr.valid = false
 			return
 		}
@@ -286,7 +286,7 @@ func (itr *iterator) nextReverse() {
 		// Move the iterator to the closest version to the desired version, so we
 		// append the current iterator key to the prefix and seek to that key.
 		seekTargetClosest := MVCCEncode(nextKey, itr.version+1)
-		fmt.Printf("nextReverse: seeking LT %s (key=%s, version=%d)\n", string(seekTargetClosest), string(nextKey), itr.version+1)
+		fmt.Printf("nextReverse: seeking LT %s (key=%X, version=%d)\n", string(seekTargetClosest), nextKey, itr.version+1)
 		itr.valid = itr.source.SeekLT(seekTargetClosest)
 
 		if !itr.valid {
@@ -309,7 +309,7 @@ func (itr *iterator) nextReverse() {
 			itr.valid = false
 			return
 		}
-		fmt.Printf("nextReverse: SeekLT(nextKey, version+1) landed on tmpKey=%s, tmpKeyVersion=%d\n", string(tmpKey), tmpKeyVersionDecoded)
+		fmt.Printf("nextReverse: SeekLT(nextKey, version+1) landed on tmpKey=%X, tmpKeyVersion=%d\n", tmpKey, tmpKeyVersionDecoded)
 
 		// If iterator is at a entry whose version is higher than requested version, call nextReverse again
 		if tmpKeyVersionDecoded > itr.version {
