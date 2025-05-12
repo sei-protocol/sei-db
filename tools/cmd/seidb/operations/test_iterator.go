@@ -18,15 +18,20 @@ func TestIteratorCmd() *cobra.Command {
 	}
 
 	iteratorCmd.PersistentFlags().StringP("home-dir", "d", "/root/.sei", "Database Directory")
+	iteratorCmd.PersistentFlags().StringP("start", "s", "07", "Start key")
+	iteratorCmd.PersistentFlags().StringP("end", "e", "08", "End key")
+
 	return iteratorCmd
 }
 
 func executeIterator(cmd *cobra.Command, _ []string) {
 	homeDir, _ := cmd.Flags().GetString("home-dir")
-	IterateDbData(homeDir)
+	start, _ := cmd.Flags().GetString("start")
+	end, _ := cmd.Flags().GetString("end")
+	IterateDbData(homeDir, start, end)
 }
 
-func IterateDbData(homeDir string) {
+func IterateDbData(homeDir string, start string, end string) {
 	ssConfig := config.DefaultStateStoreConfig()
 	ssConfig.KeepRecent = 0
 	ssStore, err := ss.NewStateStore(logger.NewNopLogger(), homeDir, ssConfig)
@@ -34,15 +39,23 @@ func IterateDbData(homeDir string) {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("Start iteration\n")
-	start, _ := hex.DecodeString("07")
-	end, _ := hex.DecodeString("08")
-	iter, err := ssStore.ReverseIterator("oracle", 98350313, start, end)
+	fmt.Printf("Start forward iteration\n")
+	forwardIter, err := ssStore.Iterator("oracle", 98350313, nil, nil)
+	for ; forwardIter.Valid(); forwardIter.Next() {
+		fmt.Printf("key: %X, value %X\n", forwardIter.Key(), forwardIter.Value())
+	}
+	forwardIter.Close()
+
+	fmt.Printf("Start reverse iteration\n")
+	startPos, _ := hex.DecodeString(start)
+	endPos, _ := hex.DecodeString(end)
+	iter, err := ssStore.ReverseIterator("oracle", 98350313, startPos, endPos)
 	if err != nil {
 		panic(err)
 	}
 	for ; iter.Valid(); iter.Next() {
 		fmt.Printf("key: %X, value %X\n", iter.Key(), iter.Value())
 	}
-	fmt.Printf("Complete iteration\n")
+	iter.Close()
+	fmt.Printf("Complete reverse iteration\n")
 }
