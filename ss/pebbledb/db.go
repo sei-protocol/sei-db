@@ -704,6 +704,9 @@ func (db *Database) ReverseIterator(storeKey string, version int64, start, end [
 		fmt.Printf("Invalid reverse iterator\n")
 		return nil, errors.New("invalid range")
 	}
+	currKey, currKeyVersion, _ := SplitMVCCKey(itr.Key())
+	curKeyVersionDecoded, _ := decodeUint64Ascending(currKeyVersion)
+	fmt.Printf("[Debug] After seekLT, currKey is %X, currKeyVersion is %d\n", currKey, curKeyVersionDecoded)
 
 	return newPebbleDBIterator(itr, storePrefix(storeKey), start, end, version, db.earliestVersion, true), nil
 }
