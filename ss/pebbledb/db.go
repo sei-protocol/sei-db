@@ -514,6 +514,7 @@ func (db *Database) Iterator(storeKey string, version int64, start, end []byte) 
 }
 
 func (db *Database) ReverseIterator(storeKey string, version int64, start, end []byte) (types.DBIterator, error) {
+	fmt.Printf("[Debug] Creating reverset iterator for storeKey %s, version %d, start %X, end %X\n", storeKey, version, start, end)
 	if (start != nil && len(start) == 0) || (end != nil && len(end) == 0) {
 		return nil, errorutils.ErrKeyEmpty
 	}
