@@ -35,6 +35,9 @@ func IterateDbData(homeDir string, start string, end string) {
 	ssConfig := config.DefaultStateStoreConfig()
 	ssConfig.KeepRecent = 0
 	ssStore, err := ss.NewStateStore(logger.NewNopLogger(), homeDir, ssConfig)
+	if err != nil {
+		panic(err)
+	}
 	defer ssStore.Close()
 	if err != nil {
 		panic(err)
