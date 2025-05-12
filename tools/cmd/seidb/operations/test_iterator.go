@@ -42,13 +42,6 @@ func IterateDbData(homeDir string, start string, end string) {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("Start forward iteration\n")
-	forwardIter, err := ssStore.Iterator("oracle", 98350313, nil, nil)
-	for ; forwardIter.Valid(); forwardIter.Next() {
-		fmt.Printf("key: %X, value %X\n", forwardIter.Key(), forwardIter.Value())
-	}
-	forwardIter.Close()
-	fmt.Printf("Finished forward iteration\n")
 	fmt.Printf("Start reverse iteration\n")
 	startPos, _ := hex.DecodeString(start)
 	endPos, _ := hex.DecodeString(end)
