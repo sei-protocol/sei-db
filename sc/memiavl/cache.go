@@ -2,6 +2,7 @@ package memiavl
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/allegro/bigcache/v3"
@@ -54,7 +55,7 @@ func NewLRUCache(capacity int) *LRUCache {
 		MaxEntriesInWindow: 1000 * 10 * 60,
 
 		// max entry size in bytes, used only in initial memory allocation
-		MaxEntrySize: 64 * 1024 * 1024,
+		MaxEntrySize: int(math.Min(64, float64(capacity))) * 1024 * 1024,
 
 		// prints information about additional memory allocation
 		Verbose: false,
