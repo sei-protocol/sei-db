@@ -5,7 +5,7 @@ const (
 	DefaultSnapshotKeepRecent  = 1
 	DefaultSnapshotWriterLimit = 1
 	DefaultAsyncCommitBuffer   = 100
-	DefaultCacheSize           = 100000
+	DefaultCacheSize           = 0
 	DefaultSSKeepRecent        = 100000
 	DefaultSSPruneInterval     = 600
 	DefaultSSImportWorkers     = 1
@@ -45,8 +45,10 @@ type StateCommitConfig struct {
 	SnapshotWriterLimit int `mapstructure:"snapshot-writer-limit"`
 
 	// CacheSize defines the size of the cache for each memiavl store.
-	// Deprecated: this is removed, we will just rely on mmap page cache
 	CacheSize int `mapstructure:"cache-size"`
+
+	// CacheModules defines list of module names that should enable LRU cache.
+	CacheModules string `mapstructure:"cache-modules"`
 }
 
 type StateStoreConfig struct {
@@ -100,6 +102,7 @@ func DefaultStateCommitConfig() StateCommitConfig {
 		CacheSize:          DefaultCacheSize,
 		SnapshotInterval:   DefaultSnapshotInterval,
 		SnapshotKeepRecent: DefaultSnapshotKeepRecent,
+		ZeroCopy:           true,
 	}
 }
 

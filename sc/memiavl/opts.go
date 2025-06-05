@@ -22,7 +22,9 @@ type Options struct {
 	AsyncCommitBuffer int
 	// ZeroCopy if true, the get and iterator methods could return a slice pointing to mmaped blob files.
 	ZeroCopy bool
-	// CacheSize defines the cache's max entry size for each memiavl store.
+	// CacheModules defines list of modules that should enable LRU cache
+	CacheModules []string
+	// CacheSize defines the cache's max entry size in MB for each memiavl store.
 	CacheSize int
 	// LoadForOverwriting if true rollbacks the state, specifically the OpenDB method will
 	// truncate the versions after the `TargetVersion`, the `TargetVersion` becomes the latest version.
@@ -52,9 +54,5 @@ func (opts *Options) FillDefaults() {
 
 	if opts.SnapshotWriterLimit <= 0 {
 		opts.SnapshotWriterLimit = config.DefaultSnapshotWriterLimit
-	}
-
-	if opts.CacheSize < 0 {
-		opts.CacheSize = config.DefaultCacheSize
 	}
 }

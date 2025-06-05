@@ -2,6 +2,7 @@ package sc
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/sei-protocol/sei-db/common/logger"
 	"github.com/sei-protocol/sei-db/common/utils"
@@ -33,6 +34,11 @@ func NewCommitStore(homeDir string, logger logger.Logger, config config.StateCom
 		SnapshotWriterLimit: config.SnapshotWriterLimit,
 		CacheSize:           config.CacheSize,
 		CreateIfMissing:     true,
+	}
+	if config.CacheModules != "" {
+		opts.CacheModules = strings.Split(config.CacheModules, ",")
+	} else {
+		opts.CacheModules = make([]string, 0)
 	}
 	commitStore := &CommitStore{
 		logger: logger,

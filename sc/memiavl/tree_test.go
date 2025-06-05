@@ -196,7 +196,7 @@ func TestTreeCopy(t *testing.T) {
 	_, _, err := tree.SaveVersion(true)
 	require.NoError(t, err)
 
-	snapshot := tree.Copy(0)
+	snapshot := tree.Copy()
 
 	tree.ApplyChangeSet(iavl.ChangeSet{Pairs: []*iavl.KVPair{
 		{Key: []byte("hello"), Value: []byte("world1")},

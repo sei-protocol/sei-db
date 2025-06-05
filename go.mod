@@ -1,6 +1,8 @@
 module github.com/sei-protocol/sei-db
 
-go 1.19
+go 1.23.0
+
+toolchain go1.23.5
 
 require (
 	github.com/alitto/pond v1.8.3
@@ -8,17 +10,18 @@ require (
 	github.com/cockroachdb/pebble v0.0.0-20230819001538-1798fbf5956c
 	github.com/confio/ics23/go v0.9.0
 	github.com/cosmos/iavl v0.21.0-alpha.1.0.20230904092046-df3db2d96583
+	github.com/dgraph-io/ristretto/v2 v2.2.0
 	github.com/gogo/protobuf v1.3.3
 	github.com/ledgerwatch/erigon-lib v0.0.0-20230210071639-db0e7ed11263
 	github.com/linxGnu/grocksdb v1.8.4
 	github.com/spf13/cobra v1.6.1
-	github.com/stretchr/testify v1.8.4
+	github.com/stretchr/testify v1.10.0
 	github.com/tendermint/tm-db v0.6.8-0.20220519162814-e24b96538a12
 	github.com/tidwall/btree v1.6.0
 	github.com/tidwall/gjson v1.10.2
 	github.com/tidwall/wal v1.1.7
 	github.com/zbiljic/go-filelock v0.0.0-20170914061330-1dbf7103ab7d
-	golang.org/x/exp v0.0.0-20230811145659-89c5cff77bcb
+	golang.org/x/exp v0.0.0-20230206171751-46f607a40771
 	modernc.org/sqlite v1.26.0
 )
 
@@ -26,7 +29,7 @@ require (
 	github.com/DataDog/zstd v1.4.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
-	github.com/cespare/xxhash/v2 v2.2.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cockroachdb/errors v1.8.1 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20190617123548-eb05cc24525f // indirect
 	github.com/cockroachdb/redact v1.0.8 // indirect
@@ -36,7 +39,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgraph-io/badger/v3 v3.2103.2 // indirect
 	github.com/dgraph-io/ristretto v0.1.1 // indirect
-	github.com/dgryski/go-farm v0.0.0-20200201041132-a6ae2369ad13 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/golang/glog v1.1.0 // indirect
@@ -78,7 +80,7 @@ require (
 	golang.org/x/mod v0.11.0 // indirect
 	golang.org/x/net v0.17.0 // indirect
 	golang.org/x/sync v0.3.0 // indirect
-	golang.org/x/sys v0.13.0 // indirect
+	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/tools v0.6.0 // indirect
 	google.golang.org/protobuf v1.31.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

@@ -44,8 +44,8 @@ type MultiTree struct {
 	// it always corresponds to the rlog entry with index 1.
 	initialVersion uint32
 
-	zeroCopy  bool
-	cacheSize int
+	zeroCopy   bool
+	cacheSetup map[string]int // cache size in MB for each tree
 
 	trees          []NamedTree    // always ordered by tree name
 	treesByName    map[string]int // index of the trees by name
@@ -55,16 +55,16 @@ type MultiTree struct {
 	metadata proto.MultiTreeMetadata
 }
 
-func NewEmptyMultiTree(initialVersion uint32, cacheSize int) *MultiTree {
+func NewEmptyMultiTree(initialVersion uint32) *MultiTree {
 	return &MultiTree{
 		initialVersion: initialVersion,
 		treesByName:    make(map[string]int),
 		zeroCopy:       true,
-		cacheSize:      cacheSize,
+		cacheSetup:     make(map[string]int),
 	}
 }
 
-func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error) {
+func LoadMultiTree(dir string, zeroCopy bool, cacheSetup map[string]int) (*MultiTree, error) {
 	metadata, err := readMetadata(dir)
 	if err != nil {
 		return nil, err
@@ -87,7 +87,14 @@ func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error)
 		if err != nil {
 			return nil, err
 		}
-		treeMap[name] = NewFromSnapshot(snapshot, zeroCopy, cacheSize)
+		// set the correct cache capacity for this module based on cache setup
+		var treeCacheSize = 0
+		if cacheSetup != nil {
+			if value, ok := cacheSetup[name]; ok {
+				treeCacheSize = value
+			}
+		}
+		treeMap[name] = NewFromSnapshot(snapshot, zeroCopy, treeCacheSize)
 	}
 
 	slices.Sort(treeNames)
@@ -106,7 +113,7 @@ func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error)
 		lastCommitInfo: *metadata.CommitInfo,
 		metadata:       *metadata,
 		zeroCopy:       zeroCopy,
-		cacheSize:      cacheSize,
+		cacheSetup:     cacheSetup,
 	}
 	// initial version is necessary for rlog index conversion
 	mtree.setInitialVersion(metadata.InitialVersion)
@@ -160,11 +167,11 @@ func (t *MultiTree) SetZeroCopy(zeroCopy bool) {
 }
 
 // Copy returns a snapshot of the tree which won't be corrupted by further modifications on the main tree.
-func (t *MultiTree) Copy(cacheSize int) *MultiTree {
+func (t *MultiTree) Copy() *MultiTree {
 	trees := make([]NamedTree, len(t.trees))
 	treesByName := make(map[string]int, len(t.trees))
 	for i, entry := range t.trees {
-		tree := entry.Tree.Copy(cacheSize)
+		tree := entry.Tree.Copy()
 		trees[i] = NamedTree{Tree: tree, Name: entry.Name}
 		treesByName[entry.Name] = i
 	}
@@ -441,6 +448,7 @@ func (t *MultiTree) ReplaceWith(other *MultiTree) error {
 	t.treesByName = other.treesByName
 	t.lastCommitInfo = other.lastCommitInfo
 	t.metadata = other.metadata
+	t.initialVersion = other.initialVersion
 	return errors.Join(errs...)
 }
 
