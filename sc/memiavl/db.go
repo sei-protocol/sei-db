@@ -77,6 +77,9 @@ type DB struct {
 	mtx sync.Mutex
 	// worker goroutine IdleTimeout = 5s
 	snapshotWriterPool *pond.WorkerPool
+
+	// Cache capacity for each module
+	cacheSetup map[string]int
 }
 
 const (
@@ -124,7 +127,13 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 	}
 
 	path := filepath.Join(opts.Dir, snapshot)
-	mtree, err := LoadMultiTree(path, opts.ZeroCopy, opts.CacheSize)
+	cacheSetup := make(map[string]int)
+	if opts.CacheSize > 0 {
+		for _, treeName := range opts.CacheModules {
+			cacheSetup[treeName] = opts.CacheSize
+		}
+	}
+	mtree, err := LoadMultiTree(path, opts.ZeroCopy, cacheSetup)
 	if err != nil {
 		return nil, err
 	}
@@ -197,6 +206,7 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 		snapshotKeepRecent: opts.SnapshotKeepRecent,
 		snapshotInterval:   opts.SnapshotInterval,
 		snapshotWriterPool: workerPool,
+		cacheSetup:         cacheSetup,
 	}
 
 	if !db.readOnly && db.Version() == 0 && len(opts.InitialStores) > 0 {
@@ -485,12 +495,11 @@ func (db *DB) Commit() (int64, error) {
 func (db *DB) Copy() *DB {
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
-
-	return db.copy(db.cacheSize)
+	return db.copy()
 }
 
-func (db *DB) copy(cacheSize int) *DB {
-	mtree := db.MultiTree.Copy(cacheSize)
+func (db *DB) copy() *DB {
+	mtree := db.MultiTree.Copy()
 
 	return &DB{
 		MultiTree:          *mtree,
@@ -529,7 +538,7 @@ func (db *DB) Reload() error {
 }
 
 func (db *DB) reload() error {
-	mtree, err := LoadMultiTree(currentPath(db.dir), db.zeroCopy, db.cacheSize)
+	mtree, err := LoadMultiTree(currentPath(db.dir), db.zeroCopy, db.cacheSetup)
 	if err != nil {
 		return err
 	}
@@ -537,11 +546,12 @@ func (db *DB) reload() error {
 }
 
 func (db *DB) reloadMultiTree(mtree *MultiTree) error {
-	// catch-up the pending changes
-	if err := mtree.apply(db.pendingLogEntry); err != nil {
+	err := db.MultiTree.ReplaceWith(mtree)
+	if err != nil {
 		return err
 	}
-	return db.MultiTree.ReplaceWith(mtree)
+	// catch-up the pending changes
+	return db.MultiTree.apply(db.pendingLogEntry)
 }
 
 // rewriteIfApplicable execute the snapshot rewrite strategy according to current height
@@ -583,17 +593,17 @@ func (db *DB) rewriteSnapshotBackground() error {
 	db.snapshotRewriteChan = ch
 	db.snapshotRewriteCancelFunc = cancel
 
-	cloned := db.copy(0)
+	clonedDB := db.copy()
 	go func() {
 		defer close(ch)
-
-		cloned.logger.Info("start rewriting snapshot", "version", cloned.Version())
-		if err := cloned.RewriteSnapshot(ctx); err != nil {
+		version := clonedDB.Version()
+		clonedDB.logger.Info("start rewriting snapshot", "version", version)
+		if err := clonedDB.RewriteSnapshot(ctx); err != nil {
 			ch <- snapshotResult{err: err}
 			return
 		}
-		cloned.logger.Info("finished rewriting snapshot", "version", cloned.Version())
-		mtree, err := LoadMultiTree(currentPath(cloned.dir), cloned.zeroCopy, 0)
+		clonedDB.logger.Info("finished rewriting snapshot", "version", version)
+		mtree, err := LoadMultiTree(currentPath(clonedDB.dir), clonedDB.zeroCopy, nil)
 		if err != nil {
 			ch <- snapshotResult{err: err}
 			return
@@ -605,7 +615,7 @@ func (db *DB) rewriteSnapshotBackground() error {
 			return
 		}
 
-		cloned.logger.Info("finished best-effort catchup", "version", cloned.Version(), "latest", mtree.Version())
+		clonedDB.logger.Info("finished best-effort catchup", "version", version, "latest", mtree.Version())
 
 		ch <- snapshotResult{mtree: mtree}
 	}()
@@ -798,7 +808,7 @@ func GetEarliestVersion(root string) (int64, error) {
 // current -> snapshot-0
 // ```
 func initEmptyDB(dir string, initialVersion uint32) error {
-	tmp := NewEmptyMultiTree(initialVersion, 0)
+	tmp := NewEmptyMultiTree(initialVersion)
 	snapshotDir := snapshotName(0)
 	// create tmp worker pool
 	pool := pond.New(config.DefaultSnapshotWriterLimit, config.DefaultSnapshotWriterLimit*10)

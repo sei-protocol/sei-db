@@ -4,6 +4,7 @@ go 1.19
 
 require (
 	github.com/alitto/pond v1.8.3
+	github.com/allegro/bigcache/v3 v3.1.0
 	github.com/armon/go-metrics v0.4.1
 	github.com/cockroachdb/pebble v0.0.0-20230819001538-1798fbf5956c
 	github.com/confio/ics23/go v0.9.0
@@ -18,7 +19,7 @@ require (
 	github.com/tidwall/gjson v1.10.2
 	github.com/tidwall/wal v1.1.7
 	github.com/zbiljic/go-filelock v0.0.0-20170914061330-1dbf7103ab7d
-	golang.org/x/exp v0.0.0-20230811145659-89c5cff77bcb
+	golang.org/x/exp v0.0.0-20230206171751-46f607a40771
 	modernc.org/sqlite v1.26.0
 )
 

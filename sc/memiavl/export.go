@@ -49,7 +49,7 @@ func NewMultiTreeExporter(dir string, version uint32, supportExportNonSnapshotVe
 		if int64(version) > curVersion {
 			return nil, fmt.Errorf("snapshot is not created yet: height: %d", version)
 		}
-		mtree, err = LoadMultiTree(filepath.Join(dir, snapshotName(int64(version))), true, 0)
+		mtree, err = LoadMultiTree(filepath.Join(dir, snapshotName(int64(version))), true, nil)
 		if err != nil {
 			return nil, fmt.Errorf("snapshot don't exists: height: %d, %w", version, err)
 		}

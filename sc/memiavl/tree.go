@@ -32,12 +32,15 @@ type Tree struct {
 	// sync.RWMutex is used to protect the tree for thread safety during snapshot reload
 	mtx *sync.RWMutex
 
+	// max size of the cache in MB
+	cache *LRUCache
+
 	pendingChanges chan iavl.ChangeSet
 	pendingWg      *sync.WaitGroup
 }
 
 // NewEmptyTree creates an empty tree at an arbitrary version.
-func NewEmptyTree(version uint64, initialVersion uint32) *Tree {
+func NewEmptyTree(version uint64, initialVersion uint32, cacheSize int) *Tree {
 	if version >= math.MaxUint32 {
 		panic("version overflows uint32")
 	}
@@ -47,30 +50,32 @@ func NewEmptyTree(version uint64, initialVersion uint32) *Tree {
 		initialVersion: initialVersion,
 		// no need to copy if the tree is not backed by snapshot
 		zeroCopy:  true,
+		cache:     NewLRUCache(cacheSize),
 		mtx:       &sync.RWMutex{},
 		pendingWg: &sync.WaitGroup{},
 	}
 }
 
 // New creates an empty tree at genesis version
-func New(_ int) *Tree {
-	return NewEmptyTree(0, 0)
+func New(cacheSize int) *Tree {
+	return NewEmptyTree(0, 0, cacheSize)
 }
 
 // NewWithInitialVersion creates an empty tree with initial-version,
 // it happens when a new store created at the middle of the chain.
 func NewWithInitialVersion(initialVersion uint32) *Tree {
-	return NewEmptyTree(0, initialVersion)
+	return NewEmptyTree(0, initialVersion, 0)
 }
 
 // NewFromSnapshot mmap the blob files and create the root node.
-func NewFromSnapshot(snapshot *Snapshot, zeroCopy bool, _ int) *Tree {
+func NewFromSnapshot(snapshot *Snapshot, zeroCopy bool, cacheSize int) *Tree {
 	tree := &Tree{
 		version:   snapshot.Version(),
 		snapshot:  snapshot,
 		zeroCopy:  zeroCopy,
 		mtx:       &sync.RWMutex{},
 		pendingWg: &sync.WaitGroup{},
+		cache:     NewLRUCache(cacheSize),
 	}
 
 	if !snapshot.IsEmpty() {
@@ -98,7 +103,7 @@ func (t *Tree) SetInitialVersion(initialVersion int64) error {
 
 // Copy returns a snapshot of the tree which won't be modified by further modifications on the main tree,
 // the returned new tree can be accessed concurrently with the main tree.
-func (t *Tree) Copy(_ int) *Tree {
+func (t *Tree) Copy() *Tree {
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
 	if _, ok := t.root.(*MemNode); ok {
@@ -154,12 +159,18 @@ func (t *Tree) Set(key, value []byte) {
 		value = []byte{}
 	}
 	t.root, _ = setRecursive(t.root, key, value, t.version+1, t.cowVersion)
+	if t.cache != nil {
+		t.cache.Add(key, value)
+	}
 }
 
 func (t *Tree) Remove(key []byte) {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 	_, t.root, _ = removeRecursive(t.root, key, t.version+1, t.cowVersion)
+	if t.cache != nil {
+		t.cache.Remove(key)
+	}
 }
 
 // SaveVersion increases the version number and optionally updates the hashes
@@ -226,7 +237,18 @@ func (t *Tree) GetByIndex(index int64) ([]byte, []byte) {
 }
 
 func (t *Tree) Get(key []byte) []byte {
+	if t.cache != nil {
+		if v := t.cache.Get(key); v != nil {
+			return v
+		}
+	}
 	_, value := t.GetWithIndex(key)
+	if value == nil {
+		return nil
+	}
+	if t.cache != nil {
+		t.cache.Add(key, value)
+	}
 
 	return value
 }
@@ -311,16 +333,16 @@ func (t *Tree) Close() error {
 func (t *Tree) ReplaceWith(other *Tree) error {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
-	snapshot := t.snapshot
+	if t.snapshot != nil {
+		_ = t.snapshot.Close()
+		t.snapshot = nil
+	}
 	t.version = other.version
 	t.root = other.root
 	t.snapshot = other.snapshot
 	t.initialVersion = other.initialVersion
 	t.cowVersion = other.cowVersion
 	t.zeroCopy = other.zeroCopy
-	if snapshot != nil {
-		return snapshot.Close()
-	}
 	return nil
 }
 
@@ -360,5 +382,4 @@ func (t *Tree) GetProof(key []byte) *ics23.CommitmentProof {
 	}
 
 	return commitmentProof
-
 }
