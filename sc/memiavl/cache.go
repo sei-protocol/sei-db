@@ -2,6 +2,7 @@ package memiavl
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"time"
 
@@ -55,7 +56,7 @@ func NewLRUCache(capacity int) *LRUCache {
 		MaxEntriesInWindow: 1000 * 10 * 60,
 
 		// max entry size in bytes, used only in initial memory allocation
-		MaxEntrySize: int(math.Min(64, float64(capacity))) * 1024 * 1024,
+		MaxEntrySize: int(math.Min(32, float64(capacity))) * 1024 * 1024,
 
 		// prints information about additional memory allocation
 		Verbose: false,
@@ -76,6 +77,7 @@ func NewLRUCache(capacity int) *LRUCache {
 		// Ignored if OnRemove is specified.
 		OnRemoveWithReason: nil,
 	}
+	fmt.Printf("Creating LRU cache with capacity of %d\n", capacity)
 	cache, err := bigcache.New(context.Background(), config)
 	if err != nil {
 		panic(err)

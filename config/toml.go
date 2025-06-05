@@ -18,6 +18,12 @@ sc-directory = "{{ .StateCommit.Directory }}"
 # the sdk address cache will be disabled if zero-copy is enabled.
 sc-zero-copy = {{ .StateCommit.ZeroCopy }}
 
+# Defines the max LRU cache capacity for each module in MB. Default to 0 to disable cache.
+sc-cache-size = {{ .StateCommit.CacheSize }}
+
+# Defines which module should be enabled with LRU cache. Default emtpy to disable cache.
+sc-cache-modules = {{ .StateCommit.CacheModules }}
+
 # AsyncCommitBuffer defines the size of asynchronous commit queue, this greatly improve block catching-up
 # performance, setting to 0 means synchronous commit.
 sc-async-commit-buffer = {{ .StateCommit.AsyncCommitBuffer }}
