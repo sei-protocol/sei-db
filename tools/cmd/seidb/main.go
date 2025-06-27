@@ -25,6 +25,7 @@ func main() {
 		operations.PruneCmd(),
 		operations.DumpIAVLCmd(),
 		operations.StateSizeCmd(),
+		operations.TestIteratorCmd(),
 		operations.ReplayChangelogCmd())
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)

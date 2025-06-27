@@ -677,6 +677,7 @@ func prefixEnd(b []byte) []byte {
 }
 
 func (db *Database) ReverseIterator(storeKey string, version int64, start, end []byte) (types.DBIterator, error) {
+	fmt.Printf("[Debug] Creating reverset iterator for storeKey %s, version %d, start %X, end %X\n", storeKey, version, start, end)
 	if (start != nil && len(start) == 0) || (end != nil && len(end) == 0) {
 		return nil, errorutils.ErrKeyEmpty
 	}
@@ -689,15 +690,23 @@ func (db *Database) ReverseIterator(storeKey string, version int64, start, end [
 
 	var upperBound []byte
 	if end != nil {
-		upperBound = MVCCEncode(prependStoreKey(storeKey, end), 0)
+		upperBound = MVCCEncode(prependStoreKey(storeKey, end), version+1)
 	} else {
-		upperBound = MVCCEncode(prefixEnd(storePrefix(storeKey)), 0)
+		upperBound = MVCCEncode(prefixEnd(storePrefix(storeKey)), version+1)
 	}
 
 	itr, err := db.storage.NewIter(&pebble.IterOptions{LowerBound: lowerBound, UpperBound: upperBound})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PebbleDB iterator: %w", err)
 	}
+	valid := itr.SeekLT(upperBound)
+	if !valid {
+		fmt.Printf("Invalid reverse iterator\n")
+		return nil, errors.New("invalid range")
+	}
+	currKey, currKeyVersion, _ := SplitMVCCKey(itr.Key())
+	curKeyVersionDecoded, _ := decodeUint64Ascending(currKeyVersion)
+	fmt.Printf("[Debug] After seekLT, currKey is %X, currKeyVersion is %d\n", currKey, curKeyVersionDecoded)
 
 	return newPebbleDBIterator(itr, storePrefix(storeKey), start, end, version, db.earliestVersion, true), nil
 }
