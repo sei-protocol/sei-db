@@ -198,7 +198,7 @@ func (node *MemNode) GetByIndex(index uint32) ([]byte, []byte) {
 }
 
 // EncodeBytes writes a varint length-prefixed byte slice to the writer,
-// it's used for hash computation, must be compactible with the official IAVL implementation.
+// it's used for hash computation, must be compatible with the official IAVL implementation.
 func EncodeBytes(w io.Writer, bz []byte) error {
 	var buf [binary.MaxVarintLen64]byte
 	n := binary.PutUvarint(buf[:], uint64(len(bz)))

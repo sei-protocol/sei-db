@@ -22,7 +22,7 @@ type Tree struct {
 	version uint32
 	// root node of empty tree is represented as `nil`
 	root     Node
-	snapshot *Snapshot
+	snapshot SnapshotInterface
 
 	initialVersion, cowVersion uint32
 
@@ -64,7 +64,7 @@ func NewWithInitialVersion(initialVersion uint32) *Tree {
 }
 
 // NewFromSnapshot mmap the blob files and create the root node.
-func NewFromSnapshot(snapshot *Snapshot, zeroCopy bool, _ int) *Tree {
+func NewFromSnapshot(snapshot SnapshotInterface, zeroCopy bool, _ int) *Tree {
 	tree := &Tree{
 		version:   snapshot.Version(),
 		snapshot:  snapshot,
@@ -74,7 +74,19 @@ func NewFromSnapshot(snapshot *Snapshot, zeroCopy bool, _ int) *Tree {
 	}
 
 	if !snapshot.IsEmpty() {
-		tree.root = snapshot.RootNode()
+		// Handle different snapshot types
+		switch s := snapshot.(type) {
+		case *Snapshot:
+			tree.root = s.RootNode()
+		case *MergedSnapshot:
+			tree.root = s.RootNode()
+		case *OverlaySnapshot:
+			// OverlaySnapshot doesn't support RootNode() directly
+			// We'll need to create a tree from the overlay
+			panic("OverlaySnapshot not supported in NewFromSnapshot - use LoadSnapshotWithMerge instead")
+		default:
+			panic(fmt.Sprintf("unknown snapshot type: %T", snapshot))
+		}
 	}
 
 	return tree

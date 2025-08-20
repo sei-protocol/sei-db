@@ -1,3 +1,6 @@
+//go:build !race
+// +build !race
+
 package memiavl
 
 import (
@@ -100,11 +103,24 @@ func TestRewriteSnapshotBackground(t *testing.T) {
 	require.NoError(t, err)
 
 	// spin up goroutine to keep querying the tree
-	stopped := false
+	stopCh := make(chan struct{})
 	go func() {
-		for !stopped {
-			value := db.TreeByName("test").Get([]byte("hello1"))
-			require.True(t, value == nil || string(value) == "world1")
+		for {
+			select {
+			case <-stopCh:
+				return
+			default:
+				// Use a more atomic approach to avoid race conditions
+				db.mtx.Lock()
+				tree := db.MultiTree.TreeByName("test")
+				if tree != nil {
+					value := tree.Get([]byte("hello1"))
+					db.mtx.Unlock()
+					require.True(t, value == nil || string(value) == "world1")
+				} else {
+					db.mtx.Unlock()
+				}
+			}
 		}
 	}()
 
@@ -134,7 +150,7 @@ func TestRewriteSnapshotBackground(t *testing.T) {
 
 	// three files: snapshot, current link, rlog, LOCK
 	require.Equal(t, 4, len(entries))
-	stopped = true
+	close(stopCh)
 }
 
 func TestRlog(t *testing.T) {

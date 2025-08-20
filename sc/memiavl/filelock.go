@@ -3,7 +3,7 @@ package memiavl
 import (
 	"path/filepath"
 
-	"github.com/zbiljic/go-filelock"
+	filelock "github.com/zbiljic/go-filelock"
 )
 
 type FileLock interface {

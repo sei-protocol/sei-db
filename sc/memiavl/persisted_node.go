@@ -45,7 +45,7 @@ const (
 // - key offset : 8
 // - hash       : 32
 type PersistedNode struct {
-	snapshot *Snapshot
+	snapshot SnapshotInterface
 	isLeaf   bool
 	index    uint32
 }
@@ -53,11 +53,11 @@ type PersistedNode struct {
 var _ Node = PersistedNode{}
 
 func (node PersistedNode) branchNode() NodeLayout {
-	return node.snapshot.nodesLayout.Node(node.index)
+	return node.snapshot.getNodesLayout().Node(node.index)
 }
 
 func (node PersistedNode) leafNode() LeafLayout {
-	return node.snapshot.leavesLayout.Leaf(node.index)
+	return node.snapshot.getLeavesLayout().Leaf(node.index)
 }
 
 func (node PersistedNode) Height() uint8 {

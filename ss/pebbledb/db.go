@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
 	errorutils "github.com/sei-protocol/sei-db/common/errors"
@@ -793,9 +792,10 @@ func (db *Database) RawImport(ch <-chan types.RawSnapshotNode) error {
 
 				if counter%1000000 == 0 {
 					fmt.Printf("Time taken to write batch counter %d: %v\n", counter, time.Since(startTime))
-					metrics.IncrCounterWithLabels([]string{"sei", "migration", "nodes_imported"}, float32(1000000), []metrics.Label{
-						{Name: "module", Value: latestModule},
-					})
+					// TODO: Re-enable metrics when properly initialized
+					// metrics.IncrCounterWithLabels([]string{"sei", "migration", "nodes_imported"}, float32(1000000), []metrics.Label{
+					// 	{Name: "module", Value: latestModule},
+					// })
 				}
 
 				batch, err = NewRawBatch(db.storage)

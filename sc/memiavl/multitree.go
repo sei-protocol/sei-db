@@ -9,12 +9,13 @@ import (
 	"sort"
 
 	"github.com/alitto/pond"
+	"golang.org/x/exp/slices"
+
 	"github.com/cosmos/iavl"
 	"github.com/sei-protocol/sei-db/common/errors"
 	"github.com/sei-protocol/sei-db/common/utils"
 	"github.com/sei-protocol/sei-db/proto"
 	"github.com/sei-protocol/sei-db/stream/types"
-	"golang.org/x/exp/slices"
 )
 
 const MetadataFileName = "__metadata"
@@ -83,11 +84,14 @@ func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error)
 		}
 		name := e.Name()
 		treeNames = append(treeNames, name)
-		snapshot, err := OpenSnapshot(filepath.Join(dir, name))
+
+		// Use the new loading mechanism that handles incremental snapshots
+		snapshotInterface, err := LoadSnapshotWithMerge(filepath.Join(dir, name))
 		if err != nil {
 			return nil, err
 		}
-		treeMap[name] = NewFromSnapshot(snapshot, zeroCopy, cacheSize)
+
+		treeMap[name] = NewFromSnapshot(snapshotInterface, zeroCopy, cacheSize)
 	}
 
 	slices.Sort(treeNames)
@@ -169,10 +173,15 @@ func (t *MultiTree) Copy(cacheSize int) *MultiTree {
 		treesByName[entry.Name] = i
 	}
 
-	clone := *t
-	clone.trees = trees
-	clone.treesByName = treesByName
-	return &clone
+	return &MultiTree{
+		initialVersion: t.initialVersion,
+		zeroCopy:       t.zeroCopy,
+		cacheSize:      cacheSize,
+		trees:          trees,
+		treesByName:    treesByName,
+		lastCommitInfo: t.lastCommitInfo,
+		metadata:       t.metadata,
+	}
 }
 
 func (t *MultiTree) Version() int64 {

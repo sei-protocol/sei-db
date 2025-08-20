@@ -1,16 +1,17 @@
 package config
 
 const (
-	DefaultSnapshotInterval    = 10000
-	DefaultSnapshotKeepRecent  = 1
-	DefaultSnapshotWriterLimit = 1
-	DefaultAsyncCommitBuffer   = 100
-	DefaultCacheSize           = 100000
-	DefaultSSKeepRecent        = 100000
-	DefaultSSPruneInterval     = 600
-	DefaultSSImportWorkers     = 1
-	DefaultSSAsyncBuffer       = 100
-	DefaultSSHashRange         = 1000000
+	DefaultSnapshotInterval            = 10000
+	DefaultSnapshotKeepRecent          = 1
+	DefaultSnapshotWriterLimit         = 1
+	DefaultAsyncCommitBuffer           = 100
+	DefaultCacheSize                   = 100000
+	DefaultSSKeepRecent                = 100000
+	DefaultSSPruneInterval             = 600
+	DefaultSSImportWorkers             = 1
+	DefaultSSAsyncBuffer               = 100
+	DefaultSSHashRange                 = 1000000
+	DefaultIncrementalSnapshotInterval = 1000
 )
 
 type StateCommitConfig struct {
@@ -40,6 +41,16 @@ type StateCommitConfig struct {
 
 	// SnapshotInterval defines the block interval the memiavl snapshot is taken, default to 10000.
 	SnapshotInterval uint32 `mapstructure:"snapshot-interval"`
+
+	// IncrementalSnapshotInterval defines the block interval for incremental snapshots between full snapshots.
+	// Incremental snapshots only contain modified nodes since the last snapshot, making them much faster to create.
+	// Defaults to 1000. Set to 0 to disable incremental snapshots.
+	IncrementalSnapshotInterval uint32 `mapstructure:"incremental-snapshot-interval"`
+
+	// IncrementalSnapshotTrees defines which trees should use incremental snapshots.
+	// If empty, all trees will use incremental snapshots when enabled.
+	// Example: ["bank", "acc"] to enable incremental snapshots only for bank and acc trees.
+	IncrementalSnapshotTrees []string `mapstructure:"incremental-snapshot-trees"`
 
 	// SnapshotWriterLimit defines the concurrency for taking commit store snapshot
 	SnapshotWriterLimit int `mapstructure:"snapshot-writer-limit"`
@@ -100,11 +111,13 @@ type StateStoreConfig struct {
 
 func DefaultStateCommitConfig() StateCommitConfig {
 	return StateCommitConfig{
-		Enable:             true,
-		AsyncCommitBuffer:  DefaultAsyncCommitBuffer,
-		CacheSize:          DefaultCacheSize,
-		SnapshotInterval:   DefaultSnapshotInterval,
-		SnapshotKeepRecent: DefaultSnapshotKeepRecent,
+		Enable:                      true,
+		AsyncCommitBuffer:           DefaultAsyncCommitBuffer,
+		CacheSize:                   DefaultCacheSize,
+		SnapshotInterval:            DefaultSnapshotInterval,
+		SnapshotKeepRecent:          DefaultSnapshotKeepRecent,
+		IncrementalSnapshotInterval: DefaultIncrementalSnapshotInterval,
+		IncrementalSnapshotTrees:    []string{}, // Empty means all trees
 	}
 }
 

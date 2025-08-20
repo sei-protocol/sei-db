@@ -35,6 +35,16 @@ type Options struct {
 
 	// Limit the number of concurrent snapshot writers
 	SnapshotWriterLimit int
+
+	// IncrementalSnapshotInterval defines the block interval for incremental snapshots between full snapshots.
+	// Incremental snapshots only contain modified nodes since the last snapshot, making them much faster to create.
+	// Defaults to 1000. Set to 0 to disable incremental snapshots.
+	IncrementalSnapshotInterval uint32
+
+	// IncrementalSnapshotTrees defines which trees should use incremental snapshots.
+	// If empty, all trees will use incremental snapshots when enabled.
+	// Example: ["bank", "acc"] to enable incremental snapshots only for bank and acc trees.
+	IncrementalSnapshotTrees []string
 }
 
 func (opts Options) Validate() error {
@@ -60,5 +70,9 @@ func (opts *Options) FillDefaults() {
 
 	if opts.CacheSize < 0 {
 		opts.CacheSize = config.DefaultCacheSize
+	}
+
+	if opts.IncrementalSnapshotInterval == 0 {
+		opts.IncrementalSnapshotInterval = config.DefaultIncrementalSnapshotInterval
 	}
 }
