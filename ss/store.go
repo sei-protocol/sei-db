@@ -24,6 +24,9 @@ const (
 
 	// SQLiteBackend represents sqlite
 	SQLiteBackend BackendType = "sqlite"
+
+	// ParquetBackend represents a Parquet-writer wrapper around a KV backend
+	ParquetBackend BackendType = "parquet"
 )
 
 type BackendInitializer func(dir string, config config.StateStoreConfig) (types.StateStore, error)
