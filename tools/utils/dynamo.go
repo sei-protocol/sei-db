@@ -92,20 +92,17 @@ func (d *DynamoDBClient) ExportMultipleAnalyses(analyses []*StateSizeAnalysis) e
 	return nil
 }
 
-// UpdateLatestHeightIfGreater keeps exactly one item in the metadata table
-// Table schema: Partition key 'keyname' (S), Sort key 'height' (N)
-// We persist exactly one item with key: keyname = "latest_height", height = 0
-// and store the latest value in a non-key attribute 'latest_height'.
-// This avoids attempting to update key attributes (not allowed in DynamoDB).
+// UpdateLatestHeightIfGreater keeps exactly one item in the metadata table using the schema:
+// Partition key: keyname (S). Attribute: value (N) stores the latest height.
+// It upserts the row keyname = "latest_height" and sets value = :h only if missing or lower.
 func (d *DynamoDBClient) UpdateLatestHeightIfGreater(metadataTable string, height int64) (bool, error) {
 	input := &dynamodb.UpdateItemInput{
 		TableName: aws.String(metadataTable),
 		Key: map[string]*dynamodb.AttributeValue{
 			"keyname": {S: aws.String("latest_height")},
-			"height":  {N: aws.String("0")},
 		},
-		UpdateExpression:    aws.String("SET latest_height = :h"),
-		ConditionExpression: aws.String("attribute_not_exists(latest_height) OR latest_height < :h"),
+		UpdateExpression:    aws.String("SET value = :h"),
+		ConditionExpression: aws.String("attribute_not_exists(value) OR value < :h"),
 		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
 			":h": {N: aws.String(fmt.Sprintf("%d", height))},
 		},
