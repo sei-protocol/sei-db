@@ -209,9 +209,7 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 			return nil, errorutils.Join(err, db.Close())
 		}
 	}
-	if db.streamHandler == nil {
-		fmt.Println("[Debug] DB steam handler is nil??")
-	}
+
 	// We need to prune snapshots during start up to avoid snapshot leaks
 	if !db.readOnly {
 		db.pruneSnapshots()
@@ -621,7 +619,8 @@ func (db *DB) Close() error {
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 	errs := []error{}
-
+	db.pruneSnapshotLock.Lock()
+	defer db.pruneSnapshotLock.Unlock()
 	// Close stream handler
 	if db.streamHandler != nil {
 		err := db.streamHandler.Close()
