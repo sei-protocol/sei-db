@@ -61,4 +61,6 @@ func (opts *Options) FillDefaults() {
 	if opts.CacheSize < 0 {
 		opts.CacheSize = config.DefaultCacheSize
 	}
+
+	opts.SnapshotKeepRecent = config.DefaultSnapshotKeepRecent
 }

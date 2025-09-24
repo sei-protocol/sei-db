@@ -2,8 +2,8 @@ package config
 
 const (
 	DefaultSnapshotInterval    = 10000
-	DefaultSnapshotKeepRecent  = 1
-	DefaultSnapshotWriterLimit = 1
+	DefaultSnapshotKeepRecent  = 0 //set to 0 to only keep one current snapshot
+	DefaultSnapshotWriterLimit = 8 //set to 8 to allow 8 concurrent snapshot writers
 	DefaultAsyncCommitBuffer   = 100
 	DefaultCacheSize           = 100000
 	DefaultSSKeepRecent        = 100000
