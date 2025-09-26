@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,7 +18,6 @@ import (
 	errorutils "github.com/sei-protocol/sei-db/common/errors"
 	"github.com/sei-protocol/sei-db/common/logger"
 	"github.com/sei-protocol/sei-db/common/utils"
-	"github.com/sei-protocol/sei-db/config"
 	"github.com/sei-protocol/sei-db/proto"
 	"github.com/sei-protocol/sei-db/stream/changelog"
 	"github.com/sei-protocol/sei-db/stream/types"
@@ -804,7 +804,8 @@ func initEmptyDB(dir string, initialVersion uint32) error {
 	tmp := NewEmptyMultiTree(initialVersion, 0)
 	snapshotDir := snapshotName(0)
 	// create tmp worker pool
-	pool := pond.New(config.DefaultSnapshotWriterLimit, config.DefaultSnapshotWriterLimit*10)
+	concurrency := runtime.NumCPU()
+	pool := pond.New(concurrency, concurrency*10)
 	defer pool.Stop()
 
 	if err := tmp.WriteSnapshot(context.Background(), filepath.Join(dir, snapshotDir), pool); err != nil {
