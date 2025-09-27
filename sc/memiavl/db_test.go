@@ -137,6 +137,18 @@ func TestRewriteSnapshotBackground(t *testing.T) {
 	stopped = true
 }
 
+// helper to commit one change to bump height
+func RequireCommitWithNoError(t *testing.T, db *DB, key, val string) int64 {
+	pairs := []*iavl.KVPair{{Key: []byte(key), Value: []byte(val)}}
+	cs := []*proto.NamedChangeSet{
+		{Name: "test", Changeset: iavl.ChangeSet{pairs}},
+	}
+	require.NoError(t, db.ApplyChangeSets(cs))
+	v, err := db.Commit()
+	require.NoError(t, err)
+	return v
+}
+
 // Ensures snapshot rewrite is triggered when current height minus last snapshot height
 // exceeds the configured snapshot interval (strictly greater).
 func TestSnapshotTriggerOnIntervalDiff(t *testing.T) {
@@ -145,25 +157,14 @@ func TestSnapshotTriggerOnIntervalDiff(t *testing.T) {
 		Dir:                dir,
 		CreateIfMissing:    true,
 		InitialStores:      []string{"test"},
-		SnapshotInterval:   3,
+		SnapshotInterval:   5,
 		SnapshotKeepRecent: 0,
 	})
 	require.NoError(t, err)
 
-	// helper to commit one change to bump height
-	commitOnce := func(key, val string) int64 {
-		cs := []*proto.NamedChangeSet{
-			{Name: "test", Changeset: iavl.ChangeSet{Pairs: []*iavl.KVPair{{Key: []byte(key), Value: []byte(val)}}}},
-		}
-		require.NoError(t, db.ApplyChangeSets(cs))
-		v, err := db.Commit()
-		require.NoError(t, err)
-		return v
-	}
-
-	// Heights 1..5 should NOT trigger because (a) diff<=interval for <=3, and for 4,5 modulo!=0
-	for i := 1; i <= 5; i++ {
-		v := commitOnce("k"+strconv.Itoa(i), "v")
+	// Heights 1..4 should NOT trigger because diff<=interval
+	for i := 1; i < 5; i++ {
+		v := RequireCommitWithNoError(t, db, "k"+strconv.Itoa(i), "v")
 		require.Equal(t, int64(i), v)
 		// allow any background processing
 		time.Sleep(10 * time.Millisecond)
@@ -172,25 +173,21 @@ func TestSnapshotTriggerOnIntervalDiff(t *testing.T) {
 		require.Equal(t, int64(0), db.MultiTree.SnapshotVersion())
 	}
 
-	// Height 6: diff (6-0) > interval (3) and modulo==0 => should trigger rewrite
-	v := commitOnce("k6", "v")
-	require.Equal(t, int64(6), v)
+	// Height 5 should trigger rewrite
+	v := RequireCommitWithNoError(t, db, "k6", "v")
+	require.Equal(t, int64(5), v)
 
 	// wait briefly for background rewrite to start
-	deadline := time.Now().Add(2 * time.Second)
-	for db.snapshotRewriteChan == nil && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	require.NotNil(t, db.snapshotRewriteChan, "rewrite should have started at height 6")
-
-	// drive background completion
-	for db.snapshotRewriteChan != nil {
+	require.Eventually(t, func() bool {
+		return db.snapshotRewriteChan != nil
+	}, 3*time.Second, 100*time.Millisecond)
+	require.Eventually(t, func() bool {
 		require.NoError(t, db.checkAsyncTasks())
-		time.Sleep(5 * time.Millisecond)
-	}
+		return db.snapshotRewriteChan == nil
+	}, 5*time.Second, 100*time.Millisecond)
 
 	// After completion, snapshot version should be 6
-	require.Equal(t, int64(6), db.MultiTree.SnapshotVersion())
+	require.Equal(t, int64(5), db.MultiTree.SnapshotVersion())
 
 	require.NoError(t, db.Close())
 }

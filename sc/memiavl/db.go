@@ -550,12 +550,12 @@ func (db *DB) rewriteIfApplicable(height int64) {
 		return
 	}
 
-	if height%int64(db.snapshotInterval) != 0 {
+	if db.snapshotInterval <= 0 || height <= 0 || height < db.MultiTree.SnapshotVersion() {
 		return
 	}
 
 	// create snapshot when current height - last snapshot height > interval
-	if db.snapshotInterval > 0 && height-db.MultiTree.SnapshotVersion() > int64(db.snapshotInterval) {
+	if height-db.MultiTree.SnapshotVersion() >= int64(db.snapshotInterval) {
 		if err := db.rewriteSnapshotBackground(); err != nil {
 			db.logger.Error("failed to rewrite snapshot in background", "err", err)
 		}
