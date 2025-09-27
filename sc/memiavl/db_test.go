@@ -165,12 +165,12 @@ func TestSnapshotTriggerOnIntervalDiff(t *testing.T) {
 	// Heights 1..4 should NOT trigger because diff<=interval
 	for i := 1; i < 5; i++ {
 		v := RequireCommitWithNoError(t, db, "k"+strconv.Itoa(i), "v")
-		require.Equal(t, int64(i), v)
+		require.EqualValues(t, i, v)
 		// allow any background processing
 		time.Sleep(10 * time.Millisecond)
 		require.Nil(t, db.snapshotRewriteChan, "rewrite should not start at height %d", i)
 		// snapshot version should remain 0 until rewrite
-		require.Equal(t, int64(0), db.MultiTree.SnapshotVersion())
+		require.EqualValues(t, 0, db.MultiTree.SnapshotVersion())
 	}
 
 	// Height 5 should trigger rewrite
@@ -187,7 +187,7 @@ func TestSnapshotTriggerOnIntervalDiff(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond)
 
 	// After completion, snapshot version should be 6
-	require.Equal(t, int64(5), db.MultiTree.SnapshotVersion())
+	require.EqualValues(t, 5, db.MultiTree.SnapshotVersion())
 
 	require.NoError(t, db.Close())
 }
