@@ -623,12 +623,14 @@ func (db *DB) rewriteSnapshotBackground() error {
 }
 
 func (db *DB) Close() error {
+	db.logger.Info("Closing memiavl db...")
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 	errs := []error{}
 	db.pruneSnapshotLock.Lock()
 	defer db.pruneSnapshotLock.Unlock()
 	// Close stream handler
+	db.logger.Info("Closing stream handler...")
 	if db.streamHandler != nil {
 		err := db.streamHandler.Close()
 		errs = append(errs, err)
@@ -636,6 +638,7 @@ func (db *DB) Close() error {
 	}
 
 	// Close rewrite channel
+	db.logger.Info("Closing rewrite channel...")
 	if db.snapshotRewriteChan != nil {
 		db.snapshotRewriteCancelFunc()
 		<-db.snapshotRewriteChan
@@ -646,12 +649,13 @@ func (db *DB) Close() error {
 	errs = append(errs, db.MultiTree.Close())
 
 	// Close file lock
+	db.logger.Info("Closing file lock...")
 	if db.fileLock != nil {
 		errs = append(errs, db.fileLock.Unlock())
 		errs = append(errs, db.fileLock.Destroy())
 		db.fileLock = nil
 	}
-
+	db.logger.Info("Closed memiavl db.")
 	return errorutils.Join(errs...)
 }
 
