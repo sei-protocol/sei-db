@@ -141,7 +141,7 @@ func TestRewriteSnapshotBackground(t *testing.T) {
 func RequireCommitWithNoError(t *testing.T, db *DB, key, val string) int64 {
 	pairs := []*iavl.KVPair{{Key: []byte(key), Value: []byte(val)}}
 	cs := []*proto.NamedChangeSet{
-		{Name: "test", Changeset: iavl.ChangeSet{pairs}},
+		{Name: "test", Changeset: iavl.ChangeSet{Pairs: pairs}},
 	}
 	require.NoError(t, db.ApplyChangeSets(cs))
 	v, err := db.Commit()
