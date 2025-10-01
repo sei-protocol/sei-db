@@ -82,18 +82,35 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 		ContractSizes: make(map[string]*utils.ContractSizeEntry),
 	}
 
+	var (
+		zeroValueDeletes  uint64
+		deletedKeyBytes   uint64
+		deletedValueBytes uint64
+	)
+
 	// Scan the tree to collect statistics
 	tree.ScanPostOrder(func(node memiavl.Node) bool {
 		if node.IsLeaf() {
+			key := node.Key()
+			value := node.Value()
+			prefixKey := fmt.Sprintf("%X", key)
+			prefix := prefixKey[:2]
+
+			if moduleName == "evm" && prefix == "03" && isZeroValue(value) {
+				zeroValueDeletes++
+				deletedKeyBytes += uint64(len(key))
+				deletedValueBytes += uint64(len(value))
+				tree.Remove(key)
+				return true
+			}
+
 			result.TotalNumKeys++
-			keySize := len(node.Key())
-			valueSize := len(node.Value())
+			keySize := len(key)
+			valueSize := len(value)
 			result.TotalKeySize += uint64(keySize)
 			result.TotalValueSize += uint64(valueSize)
 			result.TotalSize += uint64(keySize + valueSize)
 
-			prefixKey := fmt.Sprintf("%X", node.Key())
-			prefix := prefixKey[:2]
 			if _, exists := result.PrefixSizes[prefix]; !exists {
 				result.PrefixSizes[prefix] = &utils.PrefixSize{}
 			}
@@ -109,7 +126,7 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 					result.ContractSizes[addr] = &utils.ContractSizeEntry{Address: addr}
 				}
 				entry := result.ContractSizes[addr]
-				entry.TotalSize += uint64(len(node.Key()) + len(node.Value()))
+				entry.TotalSize += uint64(keySize + valueSize)
 				entry.KeyCount++
 			}
 
@@ -119,6 +136,18 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 		}
 		return true
 	})
+
+	if zeroValueDeletes > 0 {
+		totalDeletedBytes := deletedKeyBytes + deletedValueBytes
+		fmt.Printf(
+			"Deleted %d zero-value entries for module %s (%d key bytes, %d value bytes, %d total bytes)\n",
+			zeroValueDeletes,
+			moduleName,
+			deletedKeyBytes,
+			deletedValueBytes,
+			totalDeletedBytes,
+		)
+	}
 
 	// Limit to top 100 contracts by total size
 	result.ContractSizes = limitToTopContracts(result.ContractSizes, 100)
@@ -289,4 +318,16 @@ func createStateSizeAnalysis(blockHeight int64, moduleName string, result *Modul
 		PrefixBreakdown:   string(prefixJSON),
 		ContractBreakdown: string(contractJSON),
 	}
+}
+
+func isZeroValue(value []byte) bool {
+	if len(value) == 0 {
+		return true
+	}
+	for _, b := range value {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
