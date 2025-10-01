@@ -17,6 +17,7 @@ import (
 	"github.com/cosmos/iavl"
 	errorutils "github.com/sei-protocol/sei-db/common/errors"
 	"github.com/sei-protocol/sei-db/common/logger"
+	"github.com/sei-protocol/sei-db/common/metrics"
 	"github.com/sei-protocol/sei-db/common/utils"
 	"github.com/sei-protocol/sei-db/proto"
 	"github.com/sei-protocol/sei-db/stream/changelog"
@@ -89,7 +90,10 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 		err      error
 		fileLock FileLock
 	)
-
+	startTime := time.Now()
+	defer func() {
+		metrics.SeiDBMetrics.RestartLatency.Record(context.Background(), time.Since(startTime).Seconds())
+	}()
 	if err := opts.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid commit store options: %w", err)
 	}
