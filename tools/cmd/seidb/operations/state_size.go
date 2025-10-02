@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/sei-protocol/sei-db/common/logger"
 	"github.com/sei-protocol/sei-db/sc/memiavl"
@@ -83,6 +84,7 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 	}
 
 	deletedCount := 0
+	var wg sync.WaitGroup
 
 	// Scan the tree to collect statistics
 	tree.ScanPostOrder(func(node memiavl.Node) bool {
@@ -119,7 +121,9 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 						fmt.Printf("Deleting zeroed EVM 0x03 entry #%d with key %X\n", currentCount, keyCopy)
 					}
 					// Remove asynchronously to avoid deadlocking the ScanPostOrder read lock.
+					wg.Add(1)
 					go func(key []byte, count int) {
+						defer wg.Done()
 						tree.Remove(key)
 						if count%5000 == 0 {
 							fmt.Printf("Deleted zeroed EVM 0x03 entry #%d with key %X\n", count, key)
@@ -133,8 +137,6 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 				entry := result.ContractSizes[addr]
 				entry.TotalSize += uint64(len(node.Key()) + len(node.Value()))
 				entry.KeyCount++
-				// fmt.Println("returning false in evm 0x03 prefix")
-				// return false // quick fail for debugging, remove later
 			}
 
 			if result.TotalNumKeys%1000000 == 0 {
@@ -143,6 +145,8 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 		}
 		return true
 	})
+
+	wg.Wait()
 
 	// Limit to top 100 contracts by total size
 	result.ContractSizes = limitToTopContracts(result.ContractSizes, 100)
