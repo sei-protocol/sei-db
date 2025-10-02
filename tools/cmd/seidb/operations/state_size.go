@@ -116,7 +116,7 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 					deletedCount++
 					currentCount := deletedCount
 					keyCopy := append([]byte(nil), node.Key()...)
-					if currentCount%5000 == 0 {
+					if currentCount%100000 == 0 {
 						fmt.Printf("Found zeroed EVM 0x03 entry #%d; preparing deletion for key %X\n", currentCount, keyCopy)
 						fmt.Printf("Deleting zeroed EVM 0x03 entry #%d with key %X\n", currentCount, keyCopy)
 					}
@@ -125,7 +125,7 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 					go func(key []byte, count int) {
 						defer wg.Done()
 						tree.Remove(key)
-						if count%5000 == 0 {
+						if count%100000 == 0 {
 							fmt.Printf("Deleted zeroed EVM 0x03 entry #%d with key %X\n", count, key)
 						}
 					}(keyCopy, currentCount)
