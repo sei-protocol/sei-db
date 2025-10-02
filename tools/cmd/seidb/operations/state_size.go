@@ -83,6 +83,10 @@ func executeStateSize(cmd *cobra.Command, _ []string) {
 }
 
 func deleteZeroValueEntries(tree *memiavl.Tree, moduleName string, progressInterval uint64) (uint64, time.Duration) {
+	if moduleName != "evm" {
+		return 0, 0
+	}
+
 	if progressInterval == 0 {
 		progressInterval = defaultProgressInterval
 	}
@@ -98,22 +102,21 @@ func deleteZeroValueEntries(tree *memiavl.Tree, moduleName string, progressInter
 			return true
 		}
 
-		if moduleName != "evm" {
-			return true
-		}
-
 		now := time.Now()
 		if scanStart.IsZero() {
 			scanStart = now
 		}
 		scanEnd = now
 
-		key := node.Key()
-
-		value := node.Value()
-		if len(key) == 0 || key[0] != 0x03 {
+		prefixKey := fmt.Sprintf("%X", node.Key())
+		prefix := prefixKey[:2]
+		if prefix != "03" {
 			return true
 		}
+
+		key := node.Key()
+		value := node.Value()
+
 		fmt.Printf("0x3 Key: %X\n", key)
 		fmt.Printf("0x3 Value: %X\n", value)
 		if !isZeroValue(value) {
