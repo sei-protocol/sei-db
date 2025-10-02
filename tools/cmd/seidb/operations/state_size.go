@@ -114,6 +114,7 @@ func deleteZeroValueEntries(tree *memiavl.Tree, moduleName string, progressInter
 		}
 
 		value := node.Value()
+		fmt.Printf("Value: %X\n", value)
 		if !isZeroValue(value) {
 			scanEnd = time.Now()
 			return true
@@ -122,6 +123,7 @@ func deleteZeroValueEntries(tree *memiavl.Tree, moduleName string, progressInter
 		deleted++
 		tree.Remove(key)
 		scanEnd = time.Now()
+		fmt.Printf("Deleted %d zero-value entries in module %s (elapsed %s)\n", deleted, moduleName, time.Since(scanStart))
 
 		if deleted%progressInterval == 0 {
 			elapsed := time.Duration(0)
