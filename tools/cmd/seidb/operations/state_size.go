@@ -112,10 +112,14 @@ func deleteZeroValueEntries(tree *memiavl.Tree, moduleName string, progressInter
 		scanEnd = now
 
 		key := node.Key()
-		fmt.Printf("Key: %X\n", key)
 
 		value := node.Value()
-		fmt.Printf("Value: %X\n", value)
+		if len(key) == 0 || key[0] != 0x03 {
+			fmt.Printf("Key is not a zero-value\n")
+			return true
+		}
+		fmt.Printf("0x3 Key: %X\n", key)
+		fmt.Printf("0x3 Value: %X\n", value)
 		if !isZeroValue(value) {
 			scanEnd = time.Now()
 			return true
