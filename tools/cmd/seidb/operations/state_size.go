@@ -99,6 +99,7 @@ func deleteZeroValueEntries(tree *memiavl.Tree, moduleName string, progressInter
 			return true
 		}
 		fmt.Printf("Node is a leaf\n")
+		fmt.Printf("moduleName: %s\n", moduleName)
 
 		if moduleName != "evm" {
 			return true
