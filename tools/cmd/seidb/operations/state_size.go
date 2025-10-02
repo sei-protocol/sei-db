@@ -94,9 +94,11 @@ func deleteZeroValueEntries(tree *memiavl.Tree, moduleName string, progressInter
 	)
 
 	tree.ScanPostOrder(func(node memiavl.Node) bool {
+		fmt.Println("Scanning node %X", node.Hash())
 		if !node.IsLeaf() {
 			return true
 		}
+		fmt.Printf("Node is a leaf\n")
 
 		if moduleName != "evm" {
 			return true
