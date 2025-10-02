@@ -82,7 +82,6 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 		ContractSizes: make(map[string]*utils.ContractSizeEntry),
 	}
 
-	const maxDeletions = 1000
 	deletedCount := 0
 
 	// Scan the tree to collect statistics
@@ -112,17 +111,20 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 					result.ZeroedEVM03Entries++
 					result.ZeroedEVM03KeyBytes += uint64(keySize)
 					result.ZeroedEVM03ValueBytes += uint64(valueSize)
-					if deletedCount < maxDeletions {
-						keyCopy := append([]byte(nil), node.Key()...)
-						fmt.Printf("Found zeroed EVM 0x03 entry; preparing deletion for key %X\n", keyCopy)
-						fmt.Printf("Deleting zeroed EVM 0x03 entry with key %X\n", keyCopy)
-						deletedCount++
-						// Remove asynchronously to avoid deadlocking the ScanPostOrder read lock.
-						go func(key []byte) {
-							tree.Remove(key)
-							fmt.Printf("Deleted zeroed EVM 0x03 entry with key %X\n", key)
-						}(keyCopy)
+					deletedCount++
+					currentCount := deletedCount
+					keyCopy := append([]byte(nil), node.Key()...)
+					if currentCount%5000 == 0 {
+						fmt.Printf("Found zeroed EVM 0x03 entry #%d; preparing deletion for key %X\n", currentCount, keyCopy)
+						fmt.Printf("Deleting zeroed EVM 0x03 entry #%d with key %X\n", currentCount, keyCopy)
 					}
+					// Remove asynchronously to avoid deadlocking the ScanPostOrder read lock.
+					go func(key []byte, count int) {
+						tree.Remove(key)
+						if count%5000 == 0 {
+							fmt.Printf("Deleted zeroed EVM 0x03 entry #%d with key %X\n", count, key)
+						}
+					}(keyCopy, currentCount)
 				}
 				addr := prefixKey[2:42]
 				if _, exists := result.ContractSizes[addr]; !exists {
