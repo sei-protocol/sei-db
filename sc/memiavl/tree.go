@@ -256,7 +256,11 @@ func (t *Tree) ScanPostOrder(callback func(node Node) bool) {
 		entry := stack[len(stack)-1]
 
 		if entry.node.IsLeaf() || entry.expanded {
-			callback(entry.node)
+			continueCallback := callback(entry.node)
+			if !continueCallback {
+				fmt.Println("continueCallback: ", continueCallback, ", calling return")
+				return
+			}
 			stack = stack[:len(stack)-1]
 			continue
 		}

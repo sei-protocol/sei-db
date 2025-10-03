@@ -1,11 +1,13 @@
 package operations
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/cosmos/iavl"
 	"github.com/sei-protocol/sei-db/common/logger"
 	"github.com/sei-protocol/sei-db/sc/memiavl"
 	"github.com/sei-protocol/sei-db/tools/utils"
@@ -30,6 +32,11 @@ func StateSizeCmd() *cobra.Command {
 
 	return cmd
 }
+
+const (
+	deletionLogInterval = 5000
+	deletionChunkSize   = 10000
+)
 
 func executeStateSize(cmd *cobra.Command, _ []string) {
 	module, _ := cmd.Flags().GetString("module")
@@ -59,7 +66,10 @@ func executeStateSize(cmd *cobra.Command, _ []string) {
 	fmt.Printf("Finished opening db at height %d (requested: %d), calculating state size for module: %s\n", actualHeight, height, module)
 
 	// First, collect all the data by scanning the trees
-	moduleResults := collectAllModuleData(module, db)
+	moduleResults, err := collectAllModuleData(module, db)
+	if err != nil {
+		panic(err)
+	}
 
 	// Then process the results based on the flag
 	if exportDynamoDB {
@@ -74,13 +84,16 @@ func executeStateSize(cmd *cobra.Command, _ []string) {
 	}
 }
 
-// collectModuleStats collects all the statistics for a module
-func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
+// collectModuleStats collects all the statistics for a module and records zeroed entries for deletion.
+func collectModuleStats(tree *memiavl.Tree, moduleName string) (*ModuleResult, []*iavl.KVPair, error) {
 	result := &ModuleResult{
 		ModuleName:    moduleName,
 		PrefixSizes:   make(map[string]*utils.PrefixSize),
 		ContractSizes: make(map[string]*utils.ContractSizeEntry),
 	}
+
+	deletedCount := 0
+	var deletionPairs []*iavl.KVPair
 
 	// Scan the tree to collect statistics
 	tree.ScanPostOrder(func(node memiavl.Node) bool {
@@ -94,16 +107,30 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 
 			prefixKey := fmt.Sprintf("%X", node.Key())
 			prefix := prefixKey[:2]
-			if _, exists := result.PrefixSizes[prefix]; !exists {
-				result.PrefixSizes[prefix] = &utils.PrefixSize{}
+			if _, exists := result.PrefixSizes[moduleName]; !exists {
+				result.PrefixSizes[moduleName] = &utils.PrefixSize{}
 			}
-			result.PrefixSizes[prefix].KeySize += uint64(keySize)
-			result.PrefixSizes[prefix].ValueSize += uint64(valueSize)
-			result.PrefixSizes[prefix].TotalSize += uint64(keySize + valueSize)
-			result.PrefixSizes[prefix].KeyCount++
+			result.PrefixSizes[moduleName].KeySize += uint64(keySize)
+			result.PrefixSizes[moduleName].ValueSize += uint64(valueSize)
+			result.PrefixSizes[moduleName].TotalSize += uint64(keySize + valueSize)
+			result.PrefixSizes[moduleName].KeyCount++
 
 			// Handle EVM contract analysis
 			if moduleName == "evm" && prefix == "03" {
+				result.TotalEVM03Entries++
+				if isAllZero(node.Value()) {
+					result.ZeroedEVM03Entries++
+					result.ZeroedEVM03KeyBytes += uint64(keySize)
+					result.ZeroedEVM03ValueBytes += uint64(valueSize)
+					deletedCount++
+					currentCount := deletedCount
+					keyCopy := append([]byte(nil), node.Key()...)
+					if currentCount%deletionLogInterval == 0 {
+						fmt.Printf("Found zeroed EVM 0x03 entry #%d; preparing deletion for key %X\n", currentCount, keyCopy)
+						fmt.Printf("Deleting zeroed EVM 0x03 entry #%d with key %X\n", currentCount, keyCopy)
+					}
+					deletionPairs = append(deletionPairs, &iavl.KVPair{Key: keyCopy, Delete: true})
+				}
 				addr := prefixKey[2:42]
 				if _, exists := result.ContractSizes[addr]; !exists {
 					result.ContractSizes[addr] = &utils.ContractSizeEntry{Address: addr}
@@ -123,7 +150,7 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 	// Limit to top 100 contracts by total size
 	result.ContractSizes = limitToTopContracts(result.ContractSizes, 100)
 
-	return result
+	return result, deletionPairs, nil
 }
 
 // limitToTopContracts keeps only the top N contracts by total size
@@ -162,10 +189,15 @@ type ModuleResult struct {
 	TotalSize      uint64
 	PrefixSizes    map[string]*utils.PrefixSize
 	ContractSizes  map[string]*utils.ContractSizeEntry
+	// EVM-specific statistics for 0x03 storage prefix
+	TotalEVM03Entries     uint64
+	ZeroedEVM03Entries    uint64
+	ZeroedEVM03KeyBytes   uint64
+	ZeroedEVM03ValueBytes uint64
 }
 
-// collectAllModuleData scans all modules and collects statistics in memory
-func collectAllModuleData(module string, db *memiavl.DB) map[string]*ModuleResult {
+// collectAllModuleData scans all modules, collects statistics, and persists deletions.
+func collectAllModuleData(module string, db *memiavl.DB) (map[string]*ModuleResult, error) {
 	modules := []string{}
 	if module == "" {
 		modules = AllModules
@@ -174,6 +206,7 @@ func collectAllModuleData(module string, db *memiavl.DB) map[string]*ModuleResul
 	}
 
 	moduleResults := make(map[string]*ModuleResult)
+	deletionsByModule := make(map[string][]*iavl.KVPair)
 
 	for _, moduleName := range modules {
 		tree := db.TreeByName(moduleName)
@@ -185,16 +218,62 @@ func collectAllModuleData(module string, db *memiavl.DB) map[string]*ModuleResul
 		fmt.Printf("Analyzing module: %s\n", moduleName)
 
 		// Collect statistics directly into ModuleResult
-		result := collectModuleStats(tree, moduleName)
+		result, deletions, err := collectModuleStats(tree, moduleName)
+		if err != nil {
+			return nil, fmt.Errorf("collect module stats for %s: %w", moduleName, err)
+		}
 
 		// Store in memory (result is already a ModuleResult)
 		moduleResults[moduleName] = result
 
 		fmt.Printf("Collected stats for module %s: %d keys, %d total size\n",
 			moduleName, result.TotalNumKeys, result.TotalSize)
+
+		if len(deletions) > 0 {
+			deletionsByModule[moduleName] = deletions
+		}
 	}
 
-	return moduleResults
+	if len(deletionsByModule) > 0 {
+		moduleNames := make([]string, 0, len(deletionsByModule))
+		for name := range deletionsByModule {
+			moduleNames = append(moduleNames, name)
+		}
+		sort.Strings(moduleNames)
+
+		processed := 0
+		for _, moduleName := range moduleNames {
+			pairs := deletionsByModule[moduleName]
+			sort.Slice(pairs, func(i, j int) bool { // attempt to avoid "out of order" error by sorting the keys
+				return bytes.Compare(pairs[i].Key, pairs[j].Key) < 0
+			})
+
+			total := len(pairs)
+			for chunkStart := 0; chunkStart < total; chunkStart += deletionChunkSize {
+				chunkEnd := chunkStart + deletionChunkSize
+				if chunkEnd > total {
+					chunkEnd = total
+				}
+				chunk := pairs[chunkStart:chunkEnd]
+				if err := db.ApplyChangeSet(moduleName, iavl.ChangeSet{Pairs: chunk}); err != nil {
+					return nil, fmt.Errorf("apply change set for %s: %w", moduleName, err)
+				}
+				if _, err := db.Commit(); err != nil {
+					panic(err)
+				}
+				for _, pair := range chunk {
+					processed++
+					if processed%deletionLogInterval == 0 {
+						fmt.Printf("Deleted zeroed EVM 0x03 entry #%d with key %X\n", processed, pair.Key)
+					}
+				}
+				fmt.Printf("Committed deletion chunk of %d zeroed EVM 0x03 entries for module %s (%d/%d processed)\n",
+					len(chunk), moduleName, chunkEnd, total)
+			}
+		}
+	}
+
+	return moduleResults, nil
 }
 
 // exportResultsToDynamoDB exports the collected results to DynamoDB
@@ -230,6 +309,10 @@ func printResultsToConsole(moduleResults map[string]*ModuleResult) {
 		fmt.Printf("Module %s total numKeys:%d, total keySize:%d, total valueSize:%d, totalSize: %d \n",
 			result.ModuleName, result.TotalNumKeys, result.TotalKeySize, result.TotalValueSize, result.TotalSize)
 
+		fmt.Println("prefix sizes: ", result.PrefixSizes)
+		fmt.Println("module name: ", moduleName)
+		fmt.Println("Prefix Sizes[moduleName]: ", result.PrefixSizes[moduleName])
+
 		prefixKeyResult, _ := json.MarshalIndent(result.PrefixSizes[moduleName].KeySize, "", "  ")
 		fmt.Printf("Module %s prefix key size breakdown (bytes): %s \n", result.ModuleName, prefixKeyResult)
 
@@ -241,6 +324,21 @@ func printResultsToConsole(moduleResults map[string]*ModuleResult) {
 
 		numKeysResult, _ := json.MarshalIndent(result.PrefixSizes[moduleName].KeyCount, "", "  ")
 		fmt.Printf("Module %s prefix num of keys breakdown: %s \n", result.ModuleName, numKeysResult)
+
+		// EVM-only: zeroed-entry statistics for 0x03 storage
+		if moduleName == "evm" {
+			var pct float64
+			if result.TotalEVM03Entries > 0 {
+				pct = float64(result.ZeroedEVM03Entries) / float64(result.TotalEVM03Entries) * 100
+			}
+			fmt.Printf("EVM 0x03 entries: total=%d, zeroed=%d (%.2f%%), zeroed_key_bytes=%d, zeroed_value_bytes=%d\n",
+				result.TotalEVM03Entries,
+				result.ZeroedEVM03Entries,
+				pct,
+				result.ZeroedEVM03KeyBytes,
+				result.ZeroedEVM03ValueBytes,
+			)
+		}
 
 		// Display top contracts (already limited to top 100)
 		fmt.Printf("\nDetailed breakdown for 0x03 prefix (top %d contracts by total size):\n", len(result.ContractSizes))
@@ -289,4 +387,14 @@ func createStateSizeAnalysis(blockHeight int64, moduleName string, result *Modul
 		PrefixBreakdown:   string(prefixJSON),
 		ContractBreakdown: string(contractJSON),
 	}
+}
+
+// isAllZero returns true if the provided byte slice is empty or consists entirely of zero bytes.
+func isAllZero(b []byte) bool {
+	for _, by := range b {
+		if by != 0x00 {
+			return false
+		}
+	}
+	return true
 }

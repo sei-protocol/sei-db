@@ -24,6 +24,9 @@ func main() {
 		operations.DumpDbCmd(),
 		operations.PruneCmd(),
 		operations.DumpIAVLCmd(),
+		operations.DumpZeroedKeysCmd(),
+		operations.ApplyZeroedKeyDeletesCmd(),
+		operations.PoCCmd(),
 		operations.StateSizeCmd(),
 		operations.ReplayChangelogCmd())
 	if err := rootCmd.Execute(); err != nil {
