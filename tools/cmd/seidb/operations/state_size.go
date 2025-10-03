@@ -9,7 +9,6 @@ import (
 
 	"github.com/cosmos/iavl"
 	"github.com/sei-protocol/sei-db/common/logger"
-	"github.com/sei-protocol/sei-db/proto"
 	"github.com/sei-protocol/sei-db/sc/memiavl"
 	"github.com/sei-protocol/sei-db/tools/utils"
 	"github.com/spf13/cobra"
@@ -233,35 +232,30 @@ func collectAllModuleData(module string, db *memiavl.DB) (map[string]*ModuleResu
 	}
 
 	if len(deletionsByModule) > 0 {
-		var changeSets []*proto.NamedChangeSet
-		for moduleName, pairs := range deletionsByModule {
+		moduleNames := make([]string, 0, len(deletionsByModule))
+		for name := range deletionsByModule {
+			moduleNames = append(moduleNames, name)
+		}
+		sort.Strings(moduleNames)
+
+		processed := 0
+		for _, moduleName := range moduleNames {
+			pairs := deletionsByModule[moduleName]
 			sort.Slice(pairs, func(i, j int) bool {
 				return bytes.Compare(pairs[i].Key, pairs[j].Key) < 0
 			})
-			changeSets = append(changeSets, &proto.NamedChangeSet{
-				Name:      moduleName,
-				Changeset: iavl.ChangeSet{Pairs: pairs},
-			})
-		}
-		sort.Slice(changeSets, func(i, j int) bool {
-			return changeSets[i].Name < changeSets[j].Name
-		})
-		if err := db.ApplyChangeSets(changeSets); err != nil {
-			return nil, fmt.Errorf("apply change sets: %w", err)
-		}
-		if _, err := db.Commit(); err != nil {
-			return nil, fmt.Errorf("commit deletions: %w", err)
-		}
-		processed := 0
-		for _, cs := range changeSets {
-			for _, pair := range cs.Changeset.Pairs {
+			if err := db.ApplyChangeSet(moduleName, iavl.ChangeSet{Pairs: pairs}); err != nil {
+				return nil, fmt.Errorf("apply change set for %s: %w", moduleName, err)
+			}
+			if _, err := db.Commit(); err != nil {
+				return nil, fmt.Errorf("commit deletions for %s: %w", moduleName, err)
+			}
+			for _, pair := range pairs {
 				processed++
 				if processed%deletionLogInterval == 0 {
 					fmt.Printf("Deleted zeroed EVM 0x03 entry #%d with key %X\n", processed, pair.Key)
 				}
 			}
-		}
-		for moduleName, pairs := range deletionsByModule {
 			fmt.Printf("Committed deletion of %d zeroed EVM 0x03 entries for module %s\n", len(pairs), moduleName)
 		}
 	}
