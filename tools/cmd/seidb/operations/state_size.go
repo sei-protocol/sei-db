@@ -33,7 +33,10 @@ func StateSizeCmd() *cobra.Command {
 	return cmd
 }
 
-const deletionLogInterval = 5000
+const (
+	deletionLogInterval = 5000
+	deletionChunkSize   = 10000
+)
 
 func executeStateSize(cmd *cobra.Command, _ []string) {
 	module, _ := cmd.Flags().GetString("module")
@@ -241,22 +244,32 @@ func collectAllModuleData(module string, db *memiavl.DB) (map[string]*ModuleResu
 		processed := 0
 		for _, moduleName := range moduleNames {
 			pairs := deletionsByModule[moduleName]
-			sort.Slice(pairs, func(i, j int) bool {
+			sort.Slice(pairs, func(i, j int) bool { // attempt to avoid "out of order" error by sorting the keys
 				return bytes.Compare(pairs[i].Key, pairs[j].Key) < 0
 			})
-			if err := db.ApplyChangeSet(moduleName, iavl.ChangeSet{Pairs: pairs}); err != nil {
-				return nil, fmt.Errorf("apply change set for %s: %w", moduleName, err)
-			}
-			if _, err := db.Commit(); err != nil {
-				return nil, fmt.Errorf("commit deletions for %s: %w", moduleName, err)
-			}
-			for _, pair := range pairs {
-				processed++
-				if processed%deletionLogInterval == 0 {
-					fmt.Printf("Deleted zeroed EVM 0x03 entry #%d with key %X\n", processed, pair.Key)
+
+			total := len(pairs)
+			for chunkStart := 0; chunkStart < total; chunkStart += deletionChunkSize {
+				chunkEnd := chunkStart + deletionChunkSize
+				if chunkEnd > total {
+					chunkEnd = total
 				}
+				chunk := pairs[chunkStart:chunkEnd]
+				if err := db.ApplyChangeSet(moduleName, iavl.ChangeSet{Pairs: chunk}); err != nil {
+					return nil, fmt.Errorf("apply change set for %s: %w", moduleName, err)
+				}
+				if _, err := db.Commit(); err != nil {
+					return nil, fmt.Errorf("commit deletions for %s: %w", moduleName, err)
+				}
+				for _, pair := range chunk {
+					processed++
+					if processed%deletionLogInterval == 0 {
+						fmt.Printf("Deleted zeroed EVM 0x03 entry #%d with key %X\n", processed, pair.Key)
+					}
+				}
+				fmt.Printf("Committed deletion chunk of %d zeroed EVM 0x03 entries for module %s (%d/%d processed)\n",
+					len(chunk), moduleName, chunkEnd, total)
 			}
-			fmt.Printf("Committed deletion of %d zeroed EVM 0x03 entries for module %s\n", len(pairs), moduleName)
 		}
 	}
 
