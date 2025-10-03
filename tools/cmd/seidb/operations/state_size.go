@@ -2,6 +2,7 @@ package operations
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -341,6 +342,9 @@ func applyDeletionBatches(db *memiavl.DB, moduleName string, collector *moduleDe
 		if len(batch) == 0 {
 			return nil
 		}
+		sort.Slice(batch, func(i, j int) bool {
+			return bytes.Compare(batch[i].Key, batch[j].Key) < 0
+		})
 		changeSet := iavl.ChangeSet{Pairs: batch}
 		if err := db.ApplyChangeSets([]*proto.NamedChangeSet{{
 			Name:      moduleName,
