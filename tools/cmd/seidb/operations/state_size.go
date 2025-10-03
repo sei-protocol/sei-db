@@ -259,7 +259,7 @@ func collectAllModuleData(module string, db *memiavl.DB) (map[string]*ModuleResu
 					return nil, fmt.Errorf("apply change set for %s: %w", moduleName, err)
 				}
 				if _, err := db.Commit(); err != nil {
-					return nil, fmt.Errorf("commit deletions for %s: %w", moduleName, err)
+					panic(err)
 				}
 				for _, pair := range chunk {
 					processed++
