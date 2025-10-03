@@ -181,7 +181,7 @@ func runApplyZeroedKeyDeletes(cmd *cobra.Command, _ []string) error {
 				return fmt.Errorf("apply change set chunk: %w", err)
 			}
 			if _, err := db.Commit(); err != nil {
-				return fmt.Errorf("commit chunk: %w", err)
+				panic(err)
 			}
 			processed += len(chunkPairs)
 			fmt.Printf("Committed deletion chunk of %d keys (%d/%d total)\n", len(chunkPairs), processed, len(entries))
