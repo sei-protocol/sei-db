@@ -3,6 +3,7 @@ package operations
 import (
 	"encoding/hex"
 	"fmt"
+	"os"
 
 	"github.com/cosmos/iavl"
 	"github.com/sei-protocol/sei-db/common/logger"
@@ -18,8 +19,6 @@ func PoCCmd() *cobra.Command {
 		RunE:  runPoC,
 	}
 
-	cmd.PersistentFlags().StringP("db-dir", "d", "", "Database directory")
-	cmd.PersistentFlags().Int64("height", 0, "Block height to open")
 	cmd.PersistentFlags().StringP("module", "m", "evm", "Module name to mutate")
 	cmd.PersistentFlags().String("key", "POC_KEY", "Key to insert (hex or raw string)")
 	cmd.PersistentFlags().String("value", "POC_VALUE", "Value to insert (hex or raw string)")
@@ -29,24 +28,29 @@ func PoCCmd() *cobra.Command {
 }
 
 func runPoC(cmd *cobra.Command, _ []string) error {
-	dbDir, _ := cmd.Flags().GetString("db-dir")
-	height, _ := cmd.Flags().GetInt64("height")
 	moduleName, _ := cmd.Flags().GetString("module")
 	keyFlag, _ := cmd.Flags().GetString("key")
 	valueFlag, _ := cmd.Flags().GetString("value")
 	hexMode, _ := cmd.Flags().GetBool("hex")
-
-	if dbDir == "" {
-		return fmt.Errorf("must provide --db-dir")
-	}
 
 	keyBytes, valueBytes, err := decodeKeyValue(keyFlag, valueFlag, hexMode)
 	if err != nil {
 		return err
 	}
 
-	opts := memiavl.Options{Dir: dbDir, ZeroCopy: true, CreateIfMissing: false}
-	db, err := memiavl.OpenDB(logger.NewNopLogger(), height, opts)
+	tempDir, err := os.MkdirTemp("", "poc-memiavl-")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	opts := memiavl.Options{
+		Dir:             tempDir,
+		ZeroCopy:        true,
+		CreateIfMissing: true,
+		InitialStores:   []string{moduleName},
+	}
+	db, err := memiavl.OpenDB(logger.NewNopLogger(), 0, opts)
 	if err != nil {
 		return err
 	}
