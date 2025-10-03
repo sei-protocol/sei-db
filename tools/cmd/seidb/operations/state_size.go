@@ -1,13 +1,9 @@
 package operations
 
 import (
-	"bufio"
 	"bytes"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 	"sort"
 	"strings"
 
@@ -38,10 +34,7 @@ func StateSizeCmd() *cobra.Command {
 	return cmd
 }
 
-const (
-	deletionBatchSize   = 5000
-	deletionLogInterval = 5000
-)
+const deletionLogInterval = 5000
 
 func executeStateSize(cmd *cobra.Command, _ []string) {
 	module, _ := cmd.Flags().GetString("module")
@@ -90,7 +83,7 @@ func executeStateSize(cmd *cobra.Command, _ []string) {
 }
 
 // collectModuleStats collects all the statistics for a module and records zeroed entries for deletion.
-func collectModuleStats(tree *memiavl.Tree, moduleName string, deletions *moduleDeletionCollector) (*ModuleResult, error) {
+func collectModuleStats(tree *memiavl.Tree, moduleName string) (*ModuleResult, []*iavl.KVPair, error) {
 	result := &ModuleResult{
 		ModuleName:    moduleName,
 		PrefixSizes:   make(map[string]*utils.PrefixSize),
@@ -98,8 +91,7 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string, deletions *module
 	}
 
 	deletedCount := 0
-
-	var scanErr error
+	var deletionPairs []*iavl.KVPair
 
 	// Scan the tree to collect statistics
 	tree.ScanPostOrder(func(node memiavl.Node) bool {
@@ -135,10 +127,7 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string, deletions *module
 						fmt.Printf("Found zeroed EVM 0x03 entry #%d; preparing deletion for key %X\n", currentCount, keyCopy)
 						fmt.Printf("Deleting zeroed EVM 0x03 entry #%d with key %X\n", currentCount, keyCopy)
 					}
-					if err := deletions.AddKey(keyCopy); err != nil {
-						scanErr = err
-						return false
-					}
+					deletionPairs = append(deletionPairs, &iavl.KVPair{Key: keyCopy, Delete: true})
 				}
 				addr := prefixKey[2:42]
 				if _, exists := result.ContractSizes[addr]; !exists {
@@ -155,14 +144,11 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string, deletions *module
 		}
 		return true
 	})
-	if scanErr != nil {
-		return nil, scanErr
-	}
 
 	// Limit to top 100 contracts by total size
 	result.ContractSizes = limitToTopContracts(result.ContractSizes, 100)
 
-	return result, nil
+	return result, deletionPairs, nil
 }
 
 // limitToTopContracts keeps only the top N contracts by total size
@@ -218,6 +204,7 @@ func collectAllModuleData(module string, db *memiavl.DB) (map[string]*ModuleResu
 	}
 
 	moduleResults := make(map[string]*ModuleResult)
+	deletionsByModule := make(map[string][]*iavl.KVPair)
 
 	for _, moduleName := range modules {
 		tree := db.TreeByName(moduleName)
@@ -228,14 +215,8 @@ func collectAllModuleData(module string, db *memiavl.DB) (map[string]*ModuleResu
 
 		fmt.Printf("Analyzing module: %s\n", moduleName)
 
-		collector, err := newModuleDeletionCollector(moduleName)
-		if err != nil {
-			return nil, fmt.Errorf("create deletion collector: %w", err)
-		}
-		defer collector.Cleanup()
-
 		// Collect statistics directly into ModuleResult
-		result, err := collectModuleStats(tree, moduleName, collector)
+		result, deletions, err := collectModuleStats(tree, moduleName)
 		if err != nil {
 			return nil, fmt.Errorf("collect module stats for %s: %w", moduleName, err)
 		}
@@ -246,156 +227,46 @@ func collectAllModuleData(module string, db *memiavl.DB) (map[string]*ModuleResu
 		fmt.Printf("Collected stats for module %s: %d keys, %d total size\n",
 			moduleName, result.TotalNumKeys, result.TotalSize)
 
-		if err := collector.CloseWriter(); err != nil {
-			return nil, fmt.Errorf("finalize deletion collector for %s: %w", moduleName, err)
+		if len(deletions) > 0 {
+			deletionsByModule[moduleName] = deletions
 		}
+	}
 
-		if err := applyDeletionBatches(db, moduleName, collector); err != nil {
-			return nil, fmt.Errorf("apply deletions for %s: %w", moduleName, err)
+	if len(deletionsByModule) > 0 {
+		var changeSets []*proto.NamedChangeSet
+		for moduleName, pairs := range deletionsByModule {
+			sort.Slice(pairs, func(i, j int) bool {
+				return bytes.Compare(pairs[i].Key, pairs[j].Key) < 0
+			})
+			changeSets = append(changeSets, &proto.NamedChangeSet{
+				Name:      moduleName,
+				Changeset: iavl.ChangeSet{Pairs: pairs},
+			})
 		}
-
-		collector.Cleanup()
+		sort.Slice(changeSets, func(i, j int) bool {
+			return changeSets[i].Name < changeSets[j].Name
+		})
+		if err := db.ApplyChangeSets(changeSets); err != nil {
+			return nil, fmt.Errorf("apply change sets: %w", err)
+		}
+		if _, err := db.Commit(); err != nil {
+			return nil, fmt.Errorf("commit deletions: %w", err)
+		}
+		processed := 0
+		for _, cs := range changeSets {
+			for _, pair := range cs.Changeset.Pairs {
+				processed++
+				if processed%deletionLogInterval == 0 {
+					fmt.Printf("Deleted zeroed EVM 0x03 entry #%d with key %X\n", processed, pair.Key)
+				}
+			}
+		}
+		for moduleName, pairs := range deletionsByModule {
+			fmt.Printf("Committed deletion of %d zeroed EVM 0x03 entries for module %s\n", len(pairs), moduleName)
+		}
 	}
 
 	return moduleResults, nil
-}
-
-type moduleDeletionCollector struct {
-	moduleName string
-	path       string
-	file       *os.File
-	writer     *bufio.Writer
-	total      int
-}
-
-func newModuleDeletionCollector(moduleName string) (*moduleDeletionCollector, error) {
-	file, err := os.CreateTemp("", fmt.Sprintf("state-size-%s-deletions-*.bin", moduleName))
-	if err != nil {
-		return nil, err
-	}
-
-	return &moduleDeletionCollector{
-		moduleName: moduleName,
-		path:       file.Name(),
-		file:       file,
-		writer:     bufio.NewWriter(file),
-	}, nil
-}
-
-func (m *moduleDeletionCollector) AddKey(key []byte) error {
-	if m.writer == nil {
-		return fmt.Errorf("deletion collector writer closed for module %s", m.moduleName)
-	}
-	if err := binary.Write(m.writer, binary.BigEndian, uint32(len(key))); err != nil {
-		return err
-	}
-	if _, err := m.writer.Write(key); err != nil {
-		return err
-	}
-	m.total++
-	return nil
-}
-
-func (m *moduleDeletionCollector) CloseWriter() error {
-	if m.writer != nil {
-		if err := m.writer.Flush(); err != nil {
-			return err
-		}
-		m.writer = nil
-	}
-	if m.file != nil {
-		if err := m.file.Close(); err != nil {
-			return err
-		}
-		m.file = nil
-	}
-	return nil
-}
-
-func (m *moduleDeletionCollector) Cleanup() {
-	if m.file != nil {
-		_ = m.file.Close()
-		m.file = nil
-	}
-	if m.path != "" {
-		_ = os.Remove(m.path)
-		m.path = ""
-	}
-}
-
-func applyDeletionBatches(db *memiavl.DB, moduleName string, collector *moduleDeletionCollector) error {
-	if collector == nil || collector.total == 0 {
-		return nil
-	}
-
-	file, err := os.Open(collector.path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	reader := bufio.NewReader(file)
-	batch := make([]*iavl.KVPair, 0, deletionBatchSize)
-	processed := 0
-
-	flushBatch := func() error {
-		if len(batch) == 0 {
-			return nil
-		}
-		sort.Slice(batch, func(i, j int) bool {
-			return bytes.Compare(batch[i].Key, batch[j].Key) < 0
-		})
-		changeSet := iavl.ChangeSet{Pairs: batch}
-		if err := db.ApplyChangeSets([]*proto.NamedChangeSet{{
-			Name:      moduleName,
-			Changeset: changeSet,
-		}}); err != nil {
-			return err
-		}
-		if _, err := db.Commit(); err != nil {
-			return err
-		}
-		for _, pair := range batch {
-			processed++
-			if processed%deletionLogInterval == 0 {
-				fmt.Printf("Deleted zeroed EVM 0x03 entry #%d with key %X\n", processed, pair.Key)
-			}
-		}
-		// reuse underlying array to keep allocations small
-		for i := range batch {
-			batch[i] = nil
-		}
-		batch = batch[:0]
-		return nil
-	}
-
-	for {
-		var keyLen uint32
-		err := binary.Read(reader, binary.BigEndian, &keyLen)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-		key := make([]byte, keyLen)
-		if _, err := io.ReadFull(reader, key); err != nil {
-			return err
-		}
-		batch = append(batch, &iavl.KVPair{Key: key, Delete: true})
-		if len(batch) >= deletionBatchSize {
-			if err := flushBatch(); err != nil {
-				return err
-			}
-		}
-	}
-
-	if err := flushBatch(); err != nil {
-		return err
-	}
-
-	fmt.Printf("Committed deletion of %d zeroed EVM 0x03 entries for module %s\n", collector.total, moduleName)
-	return nil
 }
 
 // exportResultsToDynamoDB exports the collected results to DynamoDB
