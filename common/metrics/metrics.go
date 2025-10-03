@@ -24,19 +24,19 @@ var (
 		MemNodeCount            metric.Float64Gauge
 	}{
 		RestartLatency: must(meter.Float64Histogram(
-			"restart_latency_seconds",
+			"restart_latency",
 			metric.WithDescription("Time taken to restart the memiavl database"),
 			metric.WithUnit("s"),
 		)),
 		SnapshotCreationLatency: must(meter.Float64Histogram(
-			"snapshot_creation_latency_seconds",
+			"snapshot_creation_latency",
 			metric.WithDescription("Time taken to create memiavl snapshot"),
 			metric.WithUnit("s"),
 		)),
 		CommitLatency: must(meter.Float64Histogram(
-			"commit_latency_seconds",
+			"commit_latency",
 			metric.WithDescription("Time taken to commit"),
-			metric.WithUnit("s"),
+			metric.WithUnit("ms"),
 		)),
 		MemNodeTotalSize: must(meter.Float64Gauge(
 			"mem_node_total_size",

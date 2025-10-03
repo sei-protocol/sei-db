@@ -457,7 +457,10 @@ func (db *DB) pruneSnapshots() {
 func (db *DB) Commit() (int64, error) {
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
-
+	startTime := time.Now()
+	defer func() {
+		metrics.SeiDBMetrics.CommitLatency.Record(context.Background(), time.Since(startTime).Seconds())
+	}()
 	if db.readOnly {
 		return 0, errReadOnly
 	}
