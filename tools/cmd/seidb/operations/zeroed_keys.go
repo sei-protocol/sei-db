@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/cosmos/iavl"
 	"github.com/sei-protocol/sei-db/common/logger"
@@ -18,6 +19,11 @@ const (
 	defaultZeroedKeyLimit   = 1000
 	defaultDeletionChunkCap = 1000
 )
+
+type keyValuePair struct {
+	Key   []byte
+	Value []byte
+}
 
 // DumpZeroedKeysCmd writes up to N zeroed EVM 0x03 keys to a file for later processing.
 func DumpZeroedKeysCmd() *cobra.Command {
@@ -60,47 +66,49 @@ func runDumpZeroedKeys(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("evm tree does not exist")
 	}
 
-	keys := collectZeroedKeys(tree, limit)
-	if len(keys) == 0 {
+	entries := collectZeroedEntries(tree, limit)
+	if len(entries) == 0 {
 		fmt.Println("No zeroed EVM 0x03 keys found")
 		return nil
 	}
 
-	if err := writeHexKeys(outputPath, keys); err != nil {
+	if err := writeHexEntries(outputPath, entries); err != nil {
 		return err
 	}
 
-	fmt.Printf("Wrote %d zeroed EVM 0x03 keys to %s\n", len(keys), outputPath)
+	fmt.Printf("Wrote %d zeroed EVM 0x03 key/value pairs to %s\n", len(entries), outputPath)
 	return nil
 }
 
-func collectZeroedKeys(tree *memiavl.Tree, limit int) [][]byte {
-	var keys [][]byte
+func collectZeroedEntries(tree *memiavl.Tree, limit int) []keyValuePair {
+	var entries []keyValuePair
 
 	tree.ScanPostOrder(func(node memiavl.Node) bool {
-		if len(keys) >= limit {
+		if len(entries) >= limit {
 			return false
 		}
 		if !node.IsLeaf() {
 			return true
 		}
 
-		rawKey := node.Key()
-		if len(rawKey) < 1 {
+		if len(node.Key()) == 0 {
 			return true
 		}
 
-		if rawKey[0] == 0x03 && isAllZero(node.Value()) {
+		rawKey := node.Key()
+		rawValue := node.Value()
+		if rawKey[0] == 0x03 && isAllZero(rawValue) {
 			keyCopy := append([]byte(nil), rawKey...)
-			keys = append(keys, keyCopy)
+			valueCopy := append([]byte(nil), rawValue...)
+			entries = append(entries, keyValuePair{Key: keyCopy, Value: valueCopy})
 		}
 		return true
 	})
 
-	return keys
+	return entries
 }
 
-func writeHexKeys(path string, keys [][]byte) error {
+func writeHexEntries(path string, entries []keyValuePair) error {
 	file, err := os.Create(path)
 	if err != nil {
 		return err
@@ -108,8 +116,8 @@ func writeHexKeys(path string, keys [][]byte) error {
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
-	for _, key := range keys {
-		if _, err := writer.WriteString(fmt.Sprintf("%s\n", hex.EncodeToString(key))); err != nil {
+	for _, entry := range entries {
+		if _, err := writer.WriteString(fmt.Sprintf("%s,%s\n", hex.EncodeToString(entry.Key), hex.EncodeToString(entry.Value))); err != nil {
 			return err
 		}
 	}
@@ -145,11 +153,11 @@ func runApplyZeroedKeyDeletes(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("chunk-size must be positive")
 	}
 
-	keys, err := readHexKeys(inputPath)
+	entries, err := readHexEntries(inputPath)
 	if err != nil {
 		return err
 	}
-	if len(keys) == 0 {
+	if len(entries) == 0 {
 		fmt.Println("No keys loaded from input file")
 		return nil
 	}
@@ -161,31 +169,31 @@ func runApplyZeroedKeyDeletes(cmd *cobra.Command, _ []string) error {
 	}
 	defer db.Close()
 
-	chunkKeys := make([]*iavl.KVPair, 0, chunkSize)
+	chunkPairs := make([]*iavl.KVPair, 0, chunkSize)
 	processed := 0
-	for idx, key := range keys {
-		chunkKeys = append(chunkKeys, &iavl.KVPair{Key: key, Delete: true})
-		if len(chunkKeys) == chunkSize || idx == len(keys)-1 {
-			sort.Slice(chunkKeys, func(i, j int) bool {
-				return bytes.Compare(chunkKeys[i].Key, chunkKeys[j].Key) < 0
+	for idx, entry := range entries {
+		chunkPairs = append(chunkPairs, &iavl.KVPair{Key: entry.Key, Value: entry.Value, Delete: true})
+		if len(chunkPairs) == chunkSize || idx == len(entries)-1 {
+			sort.Slice(chunkPairs, func(i, j int) bool {
+				return bytes.Compare(chunkPairs[i].Key, chunkPairs[j].Key) < 0
 			})
-			if err := db.ApplyChangeSet("evm", iavl.ChangeSet{Pairs: chunkKeys}); err != nil {
+			if err := db.ApplyChangeSet("evm", iavl.ChangeSet{Pairs: chunkPairs}); err != nil {
 				return fmt.Errorf("apply change set chunk: %w", err)
 			}
 			if _, err := db.Commit(); err != nil {
 				return fmt.Errorf("commit chunk: %w", err)
 			}
-			processed += len(chunkKeys)
-			fmt.Printf("Committed deletion chunk of %d keys (%d/%d total)\n", len(chunkKeys), processed, len(keys))
-			chunkKeys = chunkKeys[:0]
+			processed += len(chunkPairs)
+			fmt.Printf("Committed deletion chunk of %d keys (%d/%d total)\n", len(chunkPairs), processed, len(entries))
+			chunkPairs = chunkPairs[:0]
 		}
 	}
 
-	fmt.Printf("Finished deleting %d keys from %s\n", len(keys), inputPath)
+	fmt.Printf("Finished deleting %d keys from %s\n", len(entries), inputPath)
 	return nil
 }
 
-func readHexKeys(path string) ([][]byte, error) {
+func readHexEntries(path string) ([]keyValuePair, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -193,20 +201,28 @@ func readHexKeys(path string) ([][]byte, error) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
-	var keys [][]byte
+	var entries []keyValuePair
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
 		}
-		decoded, err := hex.DecodeString(line)
-		if err != nil {
-			return nil, fmt.Errorf("decode key %q: %w", line, err)
+		parts := strings.Split(line, ",")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid line %q: expected key,value", line)
 		}
-		keys = append(keys, decoded)
+		keyBytes, err := hex.DecodeString(parts[0])
+		if err != nil {
+			return nil, fmt.Errorf("decode key %q: %w", parts[0], err)
+		}
+		valueBytes, err := hex.DecodeString(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("decode value %q: %w", parts[1], err)
+		}
+		entries = append(entries, keyValuePair{Key: keyBytes, Value: valueBytes})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	return keys, nil
+	return entries, nil
 }
