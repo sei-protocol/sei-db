@@ -1,12 +1,7 @@
 package metrics
 
 import (
-	"context"
 	"fmt"
-	"log"
-	"net/http"
-
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
@@ -59,20 +54,11 @@ func must[V any](v V, err error) V {
 	return v
 }
 
-func SetupMetricsProvider(ctx context.Context, listenAddr string) error {
+func SetupMetricsProvider() error {
 	metricsExporter, err := prometheus.New(prometheus.WithNamespace("seidb"))
 	if err != nil {
 		return fmt.Errorf("failed to create Prometheus exporter: %w", err)
 	}
 	otel.SetMeterProvider(sdk.NewMeterProvider(sdk.WithReader(metricsExporter)))
-	go func() {
-		defer func() { _ = metricsExporter.Shutdown(ctx) }()
-		http.Handle("/metrics", promhttp.Handler())
-		err := http.ListenAndServe(listenAddr, nil)
-		if err != nil {
-			log.Printf("failed to serve metrics: %v", err)
-			return
-		}
-	}()
 	return nil
 }
