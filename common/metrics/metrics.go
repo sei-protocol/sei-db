@@ -14,7 +14,8 @@ var (
 	SeiDBMetrics = struct {
 		RestartLatency          metric.Float64Histogram
 		SnapshotCreationLatency metric.Float64Histogram
-		CommitLatency           metric.Float64Histogram
+		CommitLatency           metric.Int64Histogram
+		ApplyChangesetLatency   metric.Int64Histogram
 		MemNodeTotalSize        metric.Float64Gauge
 		MemNodeCount            metric.Float64Gauge
 	}{
@@ -28,8 +29,13 @@ var (
 			metric.WithDescription("Time taken to create memiavl snapshot"),
 			metric.WithUnit("s"),
 		)),
-		CommitLatency: must(meter.Float64Histogram(
+		CommitLatency: must(meter.Int64Histogram(
 			"commit_latency",
+			metric.WithDescription("Time taken to commit"),
+			metric.WithUnit("ms"),
+		)),
+		ApplyChangesetLatency: must(meter.Int64Histogram(
+			"apply_changeset_latency",
 			metric.WithDescription("Time taken to commit"),
 			metric.WithUnit("ms"),
 		)),

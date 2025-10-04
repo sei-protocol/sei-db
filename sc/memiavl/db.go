@@ -294,7 +294,10 @@ func (db *DB) ApplyChangeSets(changeSets []*proto.NamedChangeSet) error {
 
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
-
+	startTime := time.Now()
+	defer func() {
+		metrics.SeiDBMetrics.ApplyChangesetLatency.Record(context.Background(), time.Since(startTime).Milliseconds())
+	}()
 	if db.readOnly {
 		return errReadOnly
 	}
@@ -459,7 +462,7 @@ func (db *DB) Commit() (int64, error) {
 	defer db.mtx.Unlock()
 	startTime := time.Now()
 	defer func() {
-		metrics.SeiDBMetrics.CommitLatency.Record(context.Background(), time.Since(startTime).Seconds())
+		metrics.SeiDBMetrics.CommitLatency.Record(context.Background(), time.Since(startTime).Milliseconds())
 	}()
 	if db.readOnly {
 		return 0, errReadOnly
