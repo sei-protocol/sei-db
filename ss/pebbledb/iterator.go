@@ -3,6 +3,7 @@ package pebbledb
 import (
 	"bytes"
 	"fmt"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/sei-protocol/sei-db/ss/types"
@@ -29,6 +30,14 @@ type iterator struct {
 }
 
 func newPebbleDBIterator(src *pebble.Iterator, prefix, mvccStart, mvccEnd []byte, version int64, earliestVersion int64, reverse bool) *iterator {
+	var startStr, endStr string
+	if mvccStart != nil {
+		startStr = string(mvccStart)
+	}
+	if mvccEnd != nil {
+		endStr = string(mvccEnd)
+	}
+	fmt.Printf("[%d] SSDEBUG - newPebbleDBIterator prefix %s (length %d) mvccStart %s (length %d) mvccEnd %s (length %d) version %d earliestVersion %d reverse %t\n", time.Now().UnixNano(), string(prefix), len(prefix), startStr, len(mvccStart), endStr, len(mvccEnd), version, earliestVersion, reverse)
 	// Return invalid iterator if requested iterator height is lower than earliest version after pruning
 	if version < earliestVersion {
 		return &iterator{
@@ -100,10 +109,12 @@ func newPebbleDBIterator(src *pebble.Iterator, prefix, mvccStart, mvccEnd []byte
 // Domain returns the domain of the iterator. The caller must not modify the
 // return values.
 func (itr *iterator) Domain() ([]byte, []byte) {
+	fmt.Printf("[%d] SSDEBUG - iterator.Domain\n", time.Now().UnixNano())
 	return itr.start, itr.end
 }
 
 func (itr *iterator) Key() []byte {
+	fmt.Printf("[%d] SSDEBUG - iterator.Key\n", time.Now().UnixNano())
 	itr.assertIsValid()
 
 	key, _, ok := SplitMVCCKey(itr.source.Key())
@@ -114,10 +125,13 @@ func (itr *iterator) Key() []byte {
 	}
 
 	keyCopy := slices.Clone(key)
-	return keyCopy[len(itr.prefix):]
+	result := keyCopy[len(itr.prefix):]
+	fmt.Printf("[%d] SSDEBUG - iterator.Key returning key %s (length %d)\n", time.Now().UnixNano(), string(result), len(result))
+	return result
 }
 
 func (itr *iterator) Value() []byte {
+	fmt.Printf("[%d] SSDEBUG - iterator.Value\n", time.Now().UnixNano())
 	itr.assertIsValid()
 
 	val, _, ok := SplitMVCCKey(itr.source.Value())
@@ -127,10 +141,13 @@ func (itr *iterator) Value() []byte {
 		panic(fmt.Sprintf("invalid PebbleDB MVCC value: %s", itr.source.Key()))
 	}
 
-	return slices.Clone(val)
+	result := slices.Clone(val)
+	fmt.Printf("[%d] SSDEBUG - iterator.Value returning value %s (length %d)\n", time.Now().UnixNano(), string(result), len(result))
+	return result
 }
 
 func (itr *iterator) nextForward() {
+	fmt.Printf("[%d] SSDEBUG - iterator.nextForward\n", time.Now().UnixNano())
 	if !itr.source.Valid() {
 		itr.valid = false
 		return
@@ -220,6 +237,7 @@ func (itr *iterator) nextForward() {
 }
 
 func (itr *iterator) nextReverse() {
+	fmt.Printf("[%d] SSDEBUG - iterator.nextReverse\n", time.Now().UnixNano())
 	if !itr.source.Valid() {
 		itr.valid = false
 		return
@@ -289,6 +307,7 @@ func (itr *iterator) nextReverse() {
 }
 
 func (itr *iterator) Next() {
+	fmt.Printf("[%d] SSDEBUG - iterator.Next reverse %t\n", time.Now().UnixNano(), itr.reverse)
 	if itr.reverse {
 		itr.nextReverse()
 	} else {
@@ -297,6 +316,7 @@ func (itr *iterator) Next() {
 }
 
 func (itr *iterator) Valid() bool {
+	fmt.Printf("[%d] SSDEBUG - iterator.Valid\n", time.Now().UnixNano())
 	// once invalid, forever invalid
 	if !itr.valid || !itr.source.Valid() {
 		itr.valid = false
@@ -321,10 +341,12 @@ func (itr *iterator) Valid() bool {
 }
 
 func (itr *iterator) Error() error {
+	fmt.Printf("[%d] SSDEBUG - iterator.Error\n", time.Now().UnixNano())
 	return itr.source.Error()
 }
 
 func (itr *iterator) Close() error {
+	fmt.Printf("[%d] SSDEBUG - iterator.Close\n", time.Now().UnixNano())
 	_ = itr.source.Close()
 	itr.source = nil
 	itr.valid = false
@@ -343,6 +365,7 @@ func (itr *iterator) assertIsValid() {
 // pair is tombstoned, the caller should call Next(). Note, this method assumes
 // the caller assures the iterator is valid first!
 func (itr *iterator) cursorTombstoned() bool {
+	fmt.Printf("[%d] SSDEBUG - iterator.cursorTombstoned\n", time.Now().UnixNano())
 	_, tombBz, ok := SplitMVCCKey(itr.source.Value())
 	if !ok {
 		// XXX: This should not happen as that would indicate we have a malformed
@@ -370,6 +393,7 @@ func (itr *iterator) cursorTombstoned() bool {
 }
 
 func (itr *iterator) DebugRawIterate() {
+	fmt.Printf("[%d] SSDEBUG - iterator.DebugRawIterate\n", time.Now().UnixNano())
 	valid := itr.source.Valid()
 	if valid {
 		// The first key may not represent the desired target version, so move the
