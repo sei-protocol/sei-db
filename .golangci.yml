@@ -1,12 +1,15 @@
+# .golangci.yml — v2 format
+version: "2"
+
 run:
   tests: false
-  #   # timeout for analysis, e.g. 30s, 5m, default is 1m
   timeout: 10m
   build-tags:
     - codeanalysis
 
 linters:
-  disable-all: true
+  # v2 replaces disable-all/enable-all with `default: std|all|none`
+  default: none
   enable:
     - bodyclose
     - dogsled
@@ -23,26 +26,30 @@ linters:
     - misspell
     - nakedret
     - staticcheck
-    # - structcheck ## author abandoned project
+    # - structcheck  # (abandoned)
     - stylecheck
     - revive
     - typecheck
     - unconvert
     - unused
     - unparam
-    - misspell
-    # - nolintlint ## does not work with IDEs like VSCode which automatically insert leading spaces
+    # - nolintlint   # (conflicts with some IDEs)
 
 issues:
   exclude-rules:
     - text: "Use of weak random number generator"
-      linters:
-        - gosec
+      linters: [gosec]
     - text: "ST1003:"
-      linters:
-        - stylecheck
+      linters: [stylecheck]
     # FIXME: Disabled until golangci-lint updates stylecheck with this fix:
     # https://github.com/dominikh/go-tools/issues/389
     - text: "ST1016:"
-      linters:
-        - stylecheck
+      linters: [stylecheck]
+
+# Output configuration is optional; the action can parse default text output.
+# If you want explicit control, you can uncomment below (v2 replaces --out-format with `output.*`):
+# output:
+#   formats:
+#     text:
+#       path: stdout
+#       colors: true
