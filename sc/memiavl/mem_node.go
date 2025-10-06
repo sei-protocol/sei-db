@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"sync/atomic"
 )
 
 type MemNode struct {
 	height  uint8
-	size    int64
 	version uint32
+	size    int64
 	key     []byte
 	value   []byte
 	left    Node
@@ -18,8 +19,33 @@ type MemNode struct {
 }
 
 var _ Node = (*MemNode)(nil)
+var (
+	TotalMemNodeSize  = atomic.Int64{}
+	TotalNumOfMemNode = atomic.Int64{}
+)
+
+func newBranchNode(
+	height uint8,
+	size int64,
+	version uint32,
+	key []byte,
+	left Node,
+	right Node) *MemNode {
+	TotalNumOfMemNode.Add(1)
+	TotalMemNodeSize.Add(int64(120 + len(key)))
+	return &MemNode{
+		height:  height,
+		size:    size,
+		version: version,
+		key:     key,
+		left:    left,
+		right:   right,
+	}
+}
 
 func newLeafNode(key, value []byte, version uint32) *MemNode {
+	TotalNumOfMemNode.Add(1)
+	TotalMemNodeSize.Add(int64(120 + len(key) + len(value)))
 	return &MemNode{
 		key: key, value: value, version: version, size: 1,
 	}

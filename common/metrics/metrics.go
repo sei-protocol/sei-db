@@ -1,11 +1,8 @@
 package metrics
 
 import (
-	"fmt"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
-	sdk "go.opentelemetry.io/otel/sdk/metric"
 )
 
 var (
@@ -16,8 +13,8 @@ var (
 		SnapshotCreationLatency metric.Float64Histogram
 		CommitLatency           metric.Int64Histogram
 		ApplyChangesetLatency   metric.Int64Histogram
-		MemNodeTotalSize        metric.Float64Gauge
-		MemNodeCount            metric.Float64Gauge
+		MemNodeTotalSize        metric.Int64Gauge
+		NumOfMemNode            metric.Int64Gauge
 	}{
 		RestartLatency: must(meter.Float64Histogram(
 			"restart_latency",
@@ -36,18 +33,18 @@ var (
 		)),
 		ApplyChangesetLatency: must(meter.Int64Histogram(
 			"apply_changeset_latency",
-			metric.WithDescription("Time taken to commit"),
+			metric.WithDescription("Time taken to apply changesets"),
 			metric.WithUnit("ms"),
 		)),
-		MemNodeTotalSize: must(meter.Float64Gauge(
+		MemNodeTotalSize: must(meter.Int64Gauge(
 			"mem_node_total_size",
-			metric.WithDescription("Time taken to restart the memiavl database"),
-			metric.WithUnit("s"),
+			metric.WithDescription("Total size of memnodes"),
+			metric.WithUnit("By"),
 		)),
-		MemNodeCount: must(meter.Float64Gauge(
+		NumOfMemNode: must(meter.Int64Gauge(
 			"mem_node_count",
-			metric.WithDescription("Time taken to restart the memiavl database"),
-			metric.WithUnit("s"),
+			metric.WithDescription("Total number of mem nodes"),
+			metric.WithUnit("{count}"),
 		)),
 	}
 )
@@ -58,13 +55,4 @@ func must[V any](v V, err error) V {
 		panic(err)
 	}
 	return v
-}
-
-func SetupMetricsProvider() error {
-	metricsExporter, err := prometheus.New(prometheus.WithNamespace("seidb"))
-	if err != nil {
-		return fmt.Errorf("failed to create Prometheus exporter: %w", err)
-	}
-	otel.SetMeterProvider(sdk.NewMeterProvider(sdk.WithReader(metricsExporter)))
-	return nil
 }

@@ -396,9 +396,12 @@ func (db *DB) checkBackgroundSnapshotRewrite() error {
 		if err := db.reloadMultiTree(result.mtree); err != nil {
 			return fmt.Errorf("switch multitree failed: %w", err)
 		}
+		// reset memnode counter
+		TotalMemNodeSize.Store(0)
+		TotalNumOfMemNode.Store(0)
 		db.logger.Info("switched to new memiavl snapshot", "version", db.MultiTree.Version())
-
 		db.pruneSnapshots()
+
 	default:
 	}
 
@@ -462,7 +465,11 @@ func (db *DB) Commit() (int64, error) {
 	defer db.mtx.Unlock()
 	startTime := time.Now()
 	defer func() {
+
 		metrics.SeiDBMetrics.CommitLatency.Record(context.Background(), time.Since(startTime).Milliseconds())
+		metrics.SeiDBMetrics.MemNodeTotalSize.Record(context.Background(), TotalMemNodeSize.Load())
+		metrics.SeiDBMetrics.NumOfMemNode.Record(context.Background(), TotalNumOfMemNode.Load())
+
 	}()
 	if db.readOnly {
 		return 0, errReadOnly
@@ -605,7 +612,10 @@ func (db *DB) rewriteSnapshotBackground() error {
 	cloned := db.copy(0)
 	go func() {
 		defer close(ch)
-
+		startTime := time.Now()
+		defer func() {
+			metrics.SeiDBMetrics.SnapshotCreationLatency.Record(context.Background(), time.Since(startTime).Seconds())
+		}()
 		cloned.logger.Info("start rewriting snapshot", "version", cloned.Version())
 		if err := cloned.RewriteSnapshot(ctx); err != nil {
 			ch <- snapshotResult{err: err}

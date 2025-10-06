@@ -43,23 +43,9 @@ func setRecursive(node Node, key, value []byte, version, cowVersion uint32) (*Me
 	if node.IsLeaf() {
 		switch bytes.Compare(key, nodeKey) {
 		case -1:
-			return &MemNode{
-				height:  1,
-				size:    2,
-				version: version,
-				key:     nodeKey,
-				left:    newLeafNode(key, value, version),
-				right:   node,
-			}, false
+			return newBranchNode(1, 2, version, nodeKey, newLeafNode(key, value, version), node), false
 		case 1:
-			return &MemNode{
-				height:  1,
-				size:    2,
-				version: version,
-				key:     key,
-				left:    node,
-				right:   newLeafNode(key, value, version),
-			}, false
+			return newBranchNode(1, 2, version, key, node, newLeafNode(key, value, version)), false
 		default:
 			newNode := node.Mutate(version, cowVersion)
 			newNode.value = value
