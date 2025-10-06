@@ -15,21 +15,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Use the SAME version as go.mod (1.24.5)
+      # Match the toolchain to go.mod (1.24.5)
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      # Ensure tools (including golangci-lint) use this local toolchain
+      # Force all tools (including golangci-lint) to use this local toolchain
       - name: Pin toolchain
         run: echo "GOTOOLCHAIN=local" >> $GITHUB_ENV
 
-      # Warm the module cache (avoids odd typecheck states)
       - run: go mod download all
 
-      # Use a golangci-lint that supports Go 1.24+
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.66.0           # any v1.64+ works; pick a recent one
+          version: v2.5.0
           args: --config=.golangci.yml --timeout=10m --out-format=colored-line-number
