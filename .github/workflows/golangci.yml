@@ -1,33 +1,25 @@
-name: golangci-lint
-on:
-  push:
-    tags: [ "v*" ]
-    branches: [ "main" ]
-  pull_request:
+name: Lint
 
-permissions:
-  contents: read
+on:
+  pull_request:
+  push:
+    branches:
+      - main
 
 jobs:
-  golangci:
-    name: lint
+  golangci-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v5
 
-      # Match the toolchain to go.mod (1.24.5)
-      - uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
-          cache: true
+          go-version: stable   # or pin a specific version
 
-      # Force all tools (including golangci-lint) to use this local toolchain
-      - name: Pin toolchain
-        run: echo "GOTOOLCHAIN=local" >> $GITHUB_ENV
-
-      - run: go mod download all
-
-      - uses: golangci/golangci-lint-action@v8
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.5.0
-          args: --config=.golangci.yml --timeout=10m --out-format=colored-line-number
+          version: v2.5.0   # or "latest"
+          args: --timeout=5m
