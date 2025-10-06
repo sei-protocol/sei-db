@@ -17,9 +17,9 @@ jobs:
     steps:
       - uses: actions/setup-go@v3
         with:
-          go-version: '1.24'
+          go-version: '1.19'
       - uses: actions/checkout@v3
       - uses: golangci/golangci-lint-action@v3
         with:
-          version: v1.59.1
+          version: v1.49
           args: --config=.golangci.yml --timeout=10m
