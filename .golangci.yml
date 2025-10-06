@@ -14,13 +14,13 @@ linters:
     - govet
     - ineffassign
     - misspell
-    - prealloc
-    - staticcheck
+
     - unconvert
   disable:
     - errcheck
     - gosec   # since you only had an exclusion rule
-    - unused  # optional, often bundled with staticcheck
+    - prealloc
+    - staticcheck
 
 formatters:
   enable:
