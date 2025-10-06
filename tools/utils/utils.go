@@ -170,8 +170,8 @@ func readByteSlice(r io.Reader) ([]byte, error) {
 
 // Randomly Shuffle kv pairs once read
 func RandomShuffle(kvPairs []KeyValuePair) {
-	rand.Seed(time.Now().UnixNano())
-	rand.Shuffle(len(kvPairs), func(i, j int) {
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	r.Shuffle(len(kvPairs), func(i, j int) {
 		kvPairs[i], kvPairs[j] = kvPairs[j], kvPairs[i]
 	})
 }

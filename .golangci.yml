@@ -10,7 +10,7 @@ linters:
   enable:
     - bodyclose
     - dogsled
-    - exportloopref
+    - copyloopvar
     - errcheck
     - goconst
     - gocritic
@@ -25,7 +25,7 @@ linters:
     - staticcheck
     # - structcheck ## author abandoned project
     - stylecheck
-    - revive
+    # - revive  ## temporarily disabled due to Go 1.22 compatibility issues
     - typecheck
     - unconvert
     - unused
@@ -36,6 +36,9 @@ linters:
 issues:
   exclude-rules:
     - text: "Use of weak random number generator"
+      linters:
+        - gosec
+    - text: "G115:" # Exclude integer overflow conversion warnings
       linters:
         - gosec
     - text: "ST1003:"

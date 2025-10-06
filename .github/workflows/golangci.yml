@@ -17,9 +17,30 @@ jobs:
     steps:
       - uses: actions/setup-go@v3
         with:
-          go-version: '1.19'
+          go-version: '1.22'
       - uses: actions/checkout@v3
+      - name: Install RELIC dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git cmake libgmp-dev libssl-dev libomp-dev
+      - name: Install RELIC library
+        run: |
+          sudo git clone https://github.com/relic-toolkit/relic.git /usr/local/src/relic
+          cd /usr/local/src/relic
+          sudo mkdir build && cd build
+          sudo ../preset/x64-pbc-bls12-381.sh .. \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCHECK=ON
+          sudo make -j$(nproc)
+          sudo make install
+          sudo ldconfig
+      - name: Set CGO environment variables
+        run: |
+          echo "CGO_ENABLED=1" >> $GITHUB_ENV
+          echo "CGO_CFLAGS=-I/usr/local/include/relic -DRLC_NO_CORE" >> $GITHUB_ENV
+          echo "CGO_LDFLAGS=-L/usr/local/lib -lrelic_s" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
       - uses: golangci/golangci-lint-action@v3
         with:
-          version: v1.49
+          version: v1.61
           args: --config=.golangci.yml --timeout=10m

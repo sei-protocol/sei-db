@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cosmos/iavl"
 	"github.com/sei-protocol/sei-db/common/logger"
@@ -42,7 +43,24 @@ func TestNewStateStore(t *testing.T) {
 		err := stateStore.ApplyChangesetAsync(int64(i), changesets)
 		require.NoError(t, err)
 	}
-	// Closing the state store without waiting for data to be fully flushed
+
+	// Wait for all async operations to complete by checking latest version
+	// This ensures data is flushed before closing
+	var finalVersion int64
+	for retries := 0; retries < 50; retries++ {
+		finalVersion, err = stateStore.GetLatestVersion()
+		if err == nil && finalVersion >= 19 {
+			break
+		}
+		// Small sleep to allow async writes to complete
+		time.Sleep(10 * time.Millisecond)
+		if retries == 49 {
+			require.NoError(t, err)
+		}
+	}
+	require.Equal(t, int64(19), finalVersion, "Expected latest version to be 19 after async writes complete")
+
+	// Closing the state store after ensuring data is fully flushed
 	err = stateStore.Close()
 	require.NoError(t, err)
 

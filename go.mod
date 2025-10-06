@@ -1,6 +1,6 @@
 module github.com/sei-protocol/sei-db
 
-go 1.19
+go 1.22
 
 require (
 	github.com/alitto/pond v1.8.3
@@ -19,6 +19,7 @@ require (
 	github.com/tidwall/gjson v1.10.2
 	github.com/tidwall/wal v1.1.7
 	github.com/zbiljic/go-filelock v0.0.0-20170914061330-1dbf7103ab7d
+	golang.org/x/crypto v0.14.0
 	golang.org/x/exp v0.0.0-20230811145659-89c5cff77bcb
 	modernc.org/sqlite v1.26.0
 )
@@ -76,7 +77,6 @@ require (
 	github.com/tidwall/tinylru v1.1.0 // indirect
 	go.etcd.io/bbolt v1.3.7 // indirect
 	go.opencensus.io v0.23.0 // indirect
-	golang.org/x/crypto v0.14.0 // indirect
 	golang.org/x/mod v0.11.0 // indirect
 	golang.org/x/net v0.17.0 // indirect
 	golang.org/x/sync v0.3.0 // indirect

@@ -339,12 +339,18 @@ func TestAsyncComputeMissingRanges(t *testing.T) {
 	err := db.ApplyChangesetAsync(31, changesets)
 	require.NoError(t, err)
 
-	// Wait a bit for the async computation to complete
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the async computation to complete with retries
+	var lastHashed int64
+	for retries := 0; retries < 50; retries++ {
+		lastHashed, err = db.GetLastRangeHashed()
+		require.NoError(t, err)
+		if lastHashed >= 30 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	// We should now have hashed up to version 30 (3 complete ranges)
-	lastHashed, err := db.GetLastRangeHashed()
-	require.NoError(t, err)
 	assert.Equal(t, int64(30), lastHashed)
 
 	// Apply more changesets to get to version 40
@@ -353,12 +359,17 @@ func TestAsyncComputeMissingRanges(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Wait a bit for async computation
-	time.Sleep(500 * time.Millisecond)
+	// Wait for async computation to complete with retries
+	for retries := 0; retries < 50; retries++ {
+		lastHashed, err = db.GetLastRangeHashed()
+		require.NoError(t, err)
+		if lastHashed >= 40 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	// We should now have hashed up to version 40
-	lastHashed, err = db.GetLastRangeHashed()
-	require.NoError(t, err)
 	assert.Equal(t, int64(40), lastHashed)
 }
 
