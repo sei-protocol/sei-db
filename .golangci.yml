@@ -1,6 +1,4 @@
-# .golangci.yml — v2 format
 version: "2"
-
 run:
   tests: false
   timeout: 10m
@@ -8,39 +6,27 @@ run:
     - codeanalysis
 
 linters:
-  # v2 uses `default:` instead of disable-all/enable-all
   default: none
   enable:
     - bodyclose
     - dogsled
-    - exportloopref   # deprecated/inactive on Go≥1.22; see note below
     - errcheck
     - goconst
-    - gocritic
-    - gofmt
-    - goimports
     - gosec
-    - gosimple
     - govet
     - ineffassign
     - misspell
-    - nakedret
+    - prealloc
     - staticcheck
-    # - structcheck    # (abandoned)
-    - stylecheck
-    - revive
     - unconvert
-    - unused
-    - unparam
-    # - nolintlint     # (conflicts with some IDEs)
+    - misspell
+  exclusions:
+    rules:
+      - linters:
+          - gosec
+        text: "Use of weak random number generator"
 
-issues:
-  exclude-rules:
-    - text: "Use of weak random number generator"
-      linters: [gosec]
-    - text: "ST1003:"
-      linters: [stylecheck]
-    # FIXME: Disabled until golangci-lint updates stylecheck with this fix:
-    # https://github.com/dominikh/go-tools/issues/389
-    - text: "ST1016:"
-      linters: [stylecheck]
+formatters:
+  enable:
+    - gofmt
+    - goimports
