@@ -27,7 +27,7 @@ jobs:
 
       - run: go mod download all
 
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.5.0
           args: --config=.golangci.yml --timeout=10m --out-format=colored-line-number
