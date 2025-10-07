@@ -308,7 +308,7 @@ func (db *Database) GetLatestMigratedModule() (string, error) {
 		}
 		return "", err
 	}
-	func() { _ = closer.Close() }()
+	defer func() { _ = closer.Close() }()
 	return string(bz), nil
 }
 
@@ -559,7 +559,7 @@ func (db *Database) Prune(version int64) error {
 	defer func() { _ = itr.Close() }()
 
 	batch := db.storage.NewBatch()
-	func() { _ = batch.Close() }()
+	defer func() { _ = batch.Close() }()
 
 	var (
 		counter                                 int
