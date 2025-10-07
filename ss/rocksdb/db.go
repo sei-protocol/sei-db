@@ -388,7 +388,10 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 	}
 	start, end := util.IterateWithPrefix(prefix, nil, nil)
 
-	latestVersion := retrieveLatestVersion(db.storage)
+	latestVersion, err := retrieveLatestVersion(db.storage)
+	if err != nil {
+		return false, err
+	}
 
 	var startTs [TimestampSize]byte
 	binary.LittleEndian.PutUint64(startTs[:], uint64(0))
