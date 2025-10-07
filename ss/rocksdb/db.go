@@ -58,6 +58,8 @@ type Database struct {
 
 	// Earliest version for db after pruning
 	earliestVersion int64
+	// Latest version for db
+	latestVersion int64
 
 	asyncWriteWG sync.WaitGroup
 
@@ -85,7 +87,13 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 		tsLow = int64(binary.LittleEndian.Uint64(tsLowBz))
 	}
 
+	// Initialize earliest version
 	earliestVersion, err := retrieveEarliestVersion(storage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve earliest version: %w", err)
+	}
+
+	latestVersion, err := retrieveLatestVersion(storage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve earliest version: %w", err)
 	}
@@ -96,6 +104,7 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 		cfHandle:        cfHandle,
 		tsLow:           tsLow,
 		earliestVersion: earliestVersion,
+		latestVersion:   latestVersion,
 		pendingChanges:  make(chan VersionedChangesets, config.AsyncWriteBuffer),
 	}
 
@@ -117,31 +126,6 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 	return database, nil
 }
 
-func NewWithDB(storage *grocksdb.DB, cfHandle *grocksdb.ColumnFamilyHandle) (*Database, error) {
-	slice, err := storage.GetFullHistoryTsLow(cfHandle)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get full_history_ts_low: %w", err)
-	}
-
-	var tsLow int64
-	tsLowBz := copyAndFreeSlice(slice)
-	if len(tsLowBz) > 0 {
-		tsLow = int64(binary.LittleEndian.Uint64(tsLowBz))
-	}
-
-	earliestVersion, err := retrieveEarliestVersion(storage)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve earliest version: %w", err)
-	}
-
-	return &Database{
-		storage:         storage,
-		cfHandle:        cfHandle,
-		tsLow:           tsLow,
-		earliestVersion: earliestVersion,
-	}, nil
-}
-
 func (db *Database) Close() error {
 	if db.streamHandler != nil {
 		// Close the changelog stream first
@@ -155,7 +139,6 @@ func (db *Database) Close() error {
 	}
 
 	db.storage.Close()
-
 	db.storage = nil
 	db.cfHandle = nil
 
@@ -177,18 +160,8 @@ func (db *Database) SetLatestVersion(version int64) error {
 	return db.storage.Put(defaultWriteOpts, []byte(latestVersionKey), ts[:])
 }
 
-func (db *Database) GetLatestVersion() (int64, error) {
-	bz, err := db.storage.GetBytes(defaultReadOpts, []byte(latestVersionKey))
-	if err != nil {
-		return 0, err
-	}
-
-	if len(bz) == 0 {
-		// in case of a fresh database
-		return 0, nil
-	}
-
-	return int64(binary.LittleEndian.Uint64(bz)), nil
+func (db *Database) GetLatestVersion() int64 {
+	return db.latestVersion
 }
 
 func (db *Database) SetEarliestVersion(version int64, ignoreVersion bool) error {
@@ -202,8 +175,8 @@ func (db *Database) SetEarliestVersion(version int64, ignoreVersion bool) error 
 	return nil
 }
 
-func (db *Database) GetEarliestVersion() (int64, error) {
-	return db.earliestVersion, nil
+func (db *Database) GetEarliestVersion() int64 {
+	return db.earliestVersion
 }
 
 func (db *Database) Has(storeKey string, version int64, key []byte) (bool, error) {
@@ -246,6 +219,7 @@ func (db *Database) ApplyChangeset(version int64, cs *proto.NamedChangeSet) erro
 		version = 1
 	}
 
+	// Update latest version in batch
 	b := NewBatch(db, version)
 
 	for _, kvPair := range cs.Changeset.Pairs {
@@ -260,7 +234,12 @@ func (db *Database) ApplyChangeset(version int64, cs *proto.NamedChangeSet) erro
 		}
 	}
 
-	return b.Write()
+	err := b.Write()
+	if err != nil {
+		return err
+	}
+	db.latestVersion = version
+	return nil
 }
 
 func (db *Database) ApplyChangesetAsync(version int64, changesets []*proto.NamedChangeSet) error {
@@ -296,10 +275,6 @@ func (db *Database) writeAsyncInBackground() {
 				if err != nil {
 					panic(err)
 				}
-			}
-			err := db.SetLatestVersion(version)
-			if err != nil {
-				panic(err)
 			}
 		}
 	}
@@ -413,10 +388,7 @@ func (db *Database) RawIterate(storeKey string, fn func(key []byte, value []byte
 	}
 	start, end := util.IterateWithPrefix(prefix, nil, nil)
 
-	latestVersion, err := db.GetLatestVersion()
-	if err != nil {
-		return false, err
-	}
+	latestVersion := retrieveLatestVersion(db.storage)
 
 	var startTs [TimestampSize]byte
 	binary.LittleEndian.PutUint64(startTs[:], uint64(0))
@@ -514,17 +486,20 @@ func (db *Database) WriteBlockRangeHash(storeKey string, beginBlockRange, endBlo
 	panic("implement me")
 }
 
-// retrieveEarliestVersion retrieves the earliest version from the database
+// retrieveEarliestVersion retrieves the earliest version from the database, if not found, return 0.
 func retrieveEarliestVersion(storage *grocksdb.DB) (int64, error) {
 	bz, err := storage.GetBytes(defaultReadOpts, []byte(earliestVersionKey))
-	if err != nil {
-		fmt.Printf("warning: rocksdb get for earliestVersionKey failed: %v", err)
-		return 0, nil
+	if err != nil || len(bz) == 0 {
+		return 0, err
 	}
+	return int64(binary.LittleEndian.Uint64(bz)), nil
+}
 
-	if len(bz) == 0 {
-		// in case of a fresh database
-		return 0, nil
+// retrieveLatestVersion retrieves the latest version from the database, if not found, return 0.
+func retrieveLatestVersion(storage *grocksdb.DB) (int64, error) {
+	bz, err := storage.GetBytes(defaultReadOpts, []byte(latestVersionKey))
+	if err != nil || len(bz) == 0 {
+		return 0, err
 	}
 
 	return int64(binary.LittleEndian.Uint64(bz)), nil
