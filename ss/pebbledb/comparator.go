@@ -209,7 +209,7 @@ func MVCCEncode(key []byte, version int64) (dst []byte) {
 	dst = append(dst, key...)
 	dst = append(dst, 0)
 
-	if version > 1 {
+	if version > 0 {
 		extra := byte(1 + 8)
 		dst = encodeUint64Ascending(dst, uint64(version))
 		dst = append(dst, extra)
