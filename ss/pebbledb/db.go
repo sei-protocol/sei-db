@@ -187,6 +187,7 @@ func (db *Database) Close() error {
 }
 
 func (db *Database) SetLatestVersion(version int64) error {
+	db.latestVersion = version
 	var ts [VersionSize]byte
 	binary.LittleEndian.PutUint64(ts[:], uint64(version))
 	err := db.storage.Set([]byte(latestVersionKey), ts[:], defaultWriteOpts)
@@ -218,7 +219,6 @@ func retrieveLatestVersion(db *pebble.DB) (int64, error) {
 func (db *Database) SetEarliestVersion(version int64, ignoreVersion bool) error {
 	if version > db.earliestVersion || ignoreVersion {
 		db.earliestVersion = version
-
 		var ts [VersionSize]byte
 		binary.LittleEndian.PutUint64(ts[:], uint64(version))
 		return db.storage.Set([]byte(earliestVersionKey), ts[:], defaultWriteOpts)

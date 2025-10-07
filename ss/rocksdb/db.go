@@ -154,9 +154,9 @@ func (db *Database) getSlice(storeKey string, version int64, key []byte) (*grock
 }
 
 func (db *Database) SetLatestVersion(version int64) error {
+	db.latestVersion = version
 	var ts [TimestampSize]byte
 	binary.LittleEndian.PutUint64(ts[:], uint64(version))
-
 	return db.storage.Put(defaultWriteOpts, []byte(latestVersionKey), ts[:])
 }
 
@@ -167,7 +167,6 @@ func (db *Database) GetLatestVersion() int64 {
 func (db *Database) SetEarliestVersion(version int64, ignoreVersion bool) error {
 	if version > db.earliestVersion || ignoreVersion {
 		db.earliestVersion = version
-
 		var ts [TimestampSize]byte
 		binary.LittleEndian.PutUint64(ts[:], uint64(version))
 		return db.storage.Put(defaultWriteOpts, []byte(earliestVersionKey), ts[:])
