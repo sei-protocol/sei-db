@@ -117,6 +117,8 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 	opts.FlushSplitBytes = opts.Levels[0].TargetFileSize
 	opts = opts.EnsureDefaults()
 
+	//TODO: add a new config and check if readonly = true to support readonly mode
+
 	db, err := pebble.Open(dataDir, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open PebbleDB: %w", err)
@@ -168,12 +170,6 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 		go database.writeAsyncInBackground()
 	}
 	return database, nil
-}
-
-func NewWithDB(storage *pebble.DB) *Database {
-	return &Database{
-		storage: storage,
-	}
 }
 
 func (db *Database) Close() error {

@@ -71,6 +71,8 @@ type Database struct {
 }
 
 func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
+	//TODO: add a new config and check if readonly = true to support readonly mode
+
 	storage, cfHandle, err := OpenRocksDB(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open RocksDB: %w", err)
@@ -126,25 +128,6 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 	return database, nil
 }
 
-func (db *Database) Close() error {
-	if db.streamHandler != nil {
-		// Close the changelog stream first
-		db.streamHandler.Close()
-		// Close the pending changes channel to signal the background goroutine to stop
-		close(db.pendingChanges)
-		// Wait for the async writes to finish processing all buffered items
-		db.asyncWriteWG.Wait()
-		// Only set to nil after background goroutine has finished
-		db.streamHandler = nil
-	}
-
-	db.storage.Close()
-	db.storage = nil
-	db.cfHandle = nil
-
-	return nil
-}
-
 func (db *Database) getSlice(storeKey string, version int64, key []byte) (*grocksdb.Slice, error) {
 	return db.storage.GetCF(
 		newTSReadOptions(version),
@@ -164,6 +147,20 @@ func (db *Database) GetLatestVersion() int64 {
 	return db.latestVersion
 }
 
+// retrieveLatestVersion retrieves the latest version from the database, if not found, return 0.
+func retrieveLatestVersion(storage *grocksdb.DB) (int64, error) {
+	bz, err := storage.GetBytes(defaultReadOpts, []byte(latestVersionKey))
+	if err != nil || len(bz) == 0 {
+		return 0, err
+	}
+	uz := binary.LittleEndian.Uint64(bz)
+	if uz > math.MaxInt64 {
+		return 0, fmt.Errorf("latest version in rocksdb overflows int64: %d", uz)
+	}
+
+	return int64(uz), nil
+}
+
 func (db *Database) SetEarliestVersion(version int64, ignoreVersion bool) error {
 	if version > db.earliestVersion || ignoreVersion {
 		db.earliestVersion = version
@@ -176,6 +173,19 @@ func (db *Database) SetEarliestVersion(version int64, ignoreVersion bool) error 
 
 func (db *Database) GetEarliestVersion() int64 {
 	return db.earliestVersion
+}
+
+// retrieveEarliestVersion retrieves the earliest version from the database, if not found, return 0.
+func retrieveEarliestVersion(storage *grocksdb.DB) (int64, error) {
+	bz, err := storage.GetBytes(defaultReadOpts, []byte(earliestVersionKey))
+	if err != nil || len(bz) == 0 {
+		return 0, err
+	}
+	ubz := binary.LittleEndian.Uint64(bz)
+	if ubz > math.MaxInt64 {
+		return 0, fmt.Errorf("earliest version in rocksdb overflows int64: %d", ubz)
+	}
+	return int64(ubz), nil
 }
 
 func (db *Database) Has(storeKey string, version int64, key []byte) (bool, error) {
@@ -483,29 +493,21 @@ func (db *Database) WriteBlockRangeHash(storeKey string, beginBlockRange, endBlo
 	panic("implement me")
 }
 
-// retrieveEarliestVersion retrieves the earliest version from the database, if not found, return 0.
-func retrieveEarliestVersion(storage *grocksdb.DB) (int64, error) {
-	bz, err := storage.GetBytes(defaultReadOpts, []byte(earliestVersionKey))
-	if err != nil || len(bz) == 0 {
-		return 0, err
-	}
-	ubz := binary.LittleEndian.Uint64(bz)
-	if ubz > math.MaxInt64 {
-		return 0, fmt.Errorf("earliest version in rocksdb overflows int64: %d", ubz)
-	}
-	return int64(ubz), nil
-}
-
-// retrieveLatestVersion retrieves the latest version from the database, if not found, return 0.
-func retrieveLatestVersion(storage *grocksdb.DB) (int64, error) {
-	bz, err := storage.GetBytes(defaultReadOpts, []byte(latestVersionKey))
-	if err != nil || len(bz) == 0 {
-		return 0, err
-	}
-	uz := binary.LittleEndian.Uint64(bz)
-	if uz > math.MaxInt64 {
-		return 0, fmt.Errorf("latest version in rocksdb overflows int64: %d", uz)
+func (db *Database) Close() error {
+	if db.streamHandler != nil {
+		// Close the changelog stream first
+		db.streamHandler.Close()
+		// Close the pending changes channel to signal the background goroutine to stop
+		close(db.pendingChanges)
+		// Wait for the async writes to finish processing all buffered items
+		db.asyncWriteWG.Wait()
+		// Only set to nil after background goroutine has finished
+		db.streamHandler = nil
 	}
 
-	return int64(uz), nil
+	db.storage.Close()
+	db.storage = nil
+	db.cfHandle = nil
+
+	return nil
 }
