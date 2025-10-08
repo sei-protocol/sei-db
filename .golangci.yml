@@ -10,17 +10,21 @@ linters:
   enable:
     - bodyclose
     - dogsled
+    - errcheck
     - goconst
+    - gosec
     - govet
     - ineffassign
     - misspell
-
-    - unconvert
-  disable:
-    - errcheck
-    - gosec   # since you only had an exclusion rule
     - prealloc
     - staticcheck
+    - unconvert
+    - misspell
+  exclusions:
+    rules:
+      - linters:
+          - gosec
+        text: "Use of weak random number generator"
 
 formatters:
   enable:
