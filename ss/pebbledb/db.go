@@ -219,7 +219,7 @@ func retrieveLatestVersion(db *pebble.DB) (int64, error) {
 	if uz > math.MaxInt64 {
 		return 0, fmt.Errorf("latest version in database overflows int64: %d", uz)
 	}
-	return int64(uz), closer.Close()
+	return int64(uz), nil
 }
 
 func (db *Database) SetEarliestVersion(version int64, ignoreVersion bool) error {
@@ -237,6 +237,28 @@ func (db *Database) SetEarliestVersion(version int64, ignoreVersion bool) error 
 
 func (db *Database) GetEarliestVersion() int64 {
 	return db.earliestVersion
+}
+
+// Retrieves earliest version from db, if not found, return 0
+func retrieveEarliestVersion(db *pebble.DB) (int64, error) {
+	bz, closer, err := db.Get([]byte(earliestVersionKey))
+	defer func() {
+		if closer != nil {
+			_ = closer.Close()
+		}
+	}()
+	if err != nil || len(bz) == 0 {
+		if errors.Is(err, pebble.ErrNotFound) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	ubz := binary.LittleEndian.Uint64(bz)
+	if ubz > math.MaxInt64 {
+		return 0, fmt.Errorf("earliest version in database overflows int64: %d", ubz)
+	}
+	return int64(ubz), nil
 }
 
 func (db *Database) SetLastRangeHashed(latestHashed int64) error {
@@ -262,28 +284,6 @@ func (db *Database) GetLastRangeHashed() (int64, error) {
 	db.lastRangeHashedMu.RUnlock()
 
 	return cachedValue, nil
-}
-
-// Retrieves earliest version from db, if not found, return 0
-func retrieveEarliestVersion(db *pebble.DB) (int64, error) {
-	bz, closer, err := db.Get([]byte(earliestVersionKey))
-	defer func() {
-		if closer != nil {
-			_ = closer.Close()
-		}
-	}()
-	if err != nil || len(bz) == 0 {
-		if errors.Is(err, pebble.ErrNotFound) {
-			return 0, nil
-		}
-		return 0, err
-	}
-
-	ubz := binary.LittleEndian.Uint64(bz)
-	if ubz > math.MaxInt64 {
-		return 0, fmt.Errorf("earliest version in database overflows int64: %d", ubz)
-	}
-	return int64(ubz), closer.Close()
 }
 
 // SetLatestKey sets the latest key processed during migration.
