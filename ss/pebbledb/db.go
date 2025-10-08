@@ -391,24 +391,21 @@ func (db *Database) ApplyChangeset(version int64, cs *proto.NamedChangeSet) erro
 
 	for _, kvPair := range cs.Changeset.Pairs {
 		if kvPair.Value == nil {
-			if err = b.Delete(cs.Name, kvPair.Key); err != nil {
+			if err := b.Delete(cs.Name, kvPair.Key); err != nil {
 				return err
 			}
-		} else {
-			if err = b.Set(cs.Name, kvPair.Key, kvPair.Value); err != nil {
-				return err
-			}
+		} else if err := b.Set(cs.Name, kvPair.Key, kvPair.Value); err != nil {
+			return err
 		}
 	}
 
 	// Mark the store as updated
 	db.storeKeyDirty.Store(cs.Name, version)
 
-	// Update latest version
-	err = b.Write()
-	if err != nil {
+	if err := b.Write(); err != nil {
 		return err
 	}
+	// Update latest version on write success
 	db.latestVersion = version
 	return nil
 }
