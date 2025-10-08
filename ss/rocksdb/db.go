@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -488,7 +489,11 @@ func retrieveEarliestVersion(storage *grocksdb.DB) (int64, error) {
 	if err != nil || len(bz) == 0 {
 		return 0, err
 	}
-	return int64(binary.LittleEndian.Uint64(bz)), nil
+	ubz := binary.LittleEndian.Uint64(bz)
+	if ubz > math.MaxInt64 {
+		return 0, fmt.Errorf("earliest version in rocksdb overflows int64: %d", ubz)
+	}
+	return int64(ubz), nil
 }
 
 // retrieveLatestVersion retrieves the latest version from the database, if not found, return 0.
@@ -497,6 +502,10 @@ func retrieveLatestVersion(storage *grocksdb.DB) (int64, error) {
 	if err != nil || len(bz) == 0 {
 		return 0, err
 	}
+	uz := binary.LittleEndian.Uint64(bz)
+	if uz > math.MaxInt64 {
+		return 0, fmt.Errorf("latest version in rocksdb overflows int64: %d", uz)
+	}
 
-	return int64(binary.LittleEndian.Uint64(bz)), nil
+	return int64(uz), nil
 }
