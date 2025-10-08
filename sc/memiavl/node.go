@@ -33,19 +33,25 @@ type Node interface {
 
 // setRecursive do set operation.
 // it always do modification and return new `MemNode`, even if the value is the same.
-// also returns if it's an update or insertion, if update, the tree height and balance is not changed.
+// also returns if it's an update or insertion, if updated, the tree height and balance is not changed.
 func setRecursive(node Node, key, value []byte, version, cowVersion uint32) (*MemNode, bool) {
 	if node == nil {
-		return newLeafNode(key, value, version), true
+		leafNode := newLeafNode(key, value, version)
+		IncrementMemNodeSize(leafNode)
+		return leafNode, true
 	}
 
 	nodeKey := node.Key()
 	if node.IsLeaf() {
 		switch bytes.Compare(key, nodeKey) {
 		case -1:
-			return newBranchNode(1, 2, version, nodeKey, newLeafNode(key, value, version), node), false
+			branchNode := newBranchNode(1, 2, version, nodeKey, newLeafNode(key, value, version), node)
+			IncrementMemNodeSize(branchNode)
+			return branchNode, false
 		case 1:
-			return newBranchNode(1, 2, version, key, node, newLeafNode(key, value, version)), false
+			branchNode := newBranchNode(1, 2, version, key, node, newLeafNode(key, value, version))
+			IncrementMemNodeSize(branchNode)
+			return branchNode, false
 		default:
 			newNode := node.Mutate(version, cowVersion)
 			newNode.value = value

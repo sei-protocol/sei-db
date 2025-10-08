@@ -16,10 +16,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: stable   # or pin a specific version
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v8
+          go-version: '1.24'
+      - uses: actions/checkout@v5
+      - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.5.0   # or "latest"
-          args: --timeout=5m
+          version: v2.4.0

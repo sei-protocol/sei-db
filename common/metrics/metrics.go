@@ -13,6 +13,7 @@ var (
 		SnapshotCreationLatency metric.Float64Histogram
 		CommitLatency           metric.Int64Histogram
 		ApplyChangesetLatency   metric.Int64Histogram
+		NumOfKVPairs            metric.Int64Counter
 		MemNodeTotalSize        metric.Int64Gauge
 		NumOfMemNode            metric.Int64Gauge
 	}{
@@ -35,6 +36,11 @@ var (
 			"apply_changeset_latency",
 			metric.WithDescription("Time taken to apply changesets"),
 			metric.WithUnit("ms"),
+		)),
+		NumOfKVPairs: must(meter.Int64Counter(
+			"num_of_kv_pairs",
+			metric.WithDescription("Num of kv pairs in apply changesets"),
+			metric.WithUnit("{count}"),
 		)),
 		MemNodeTotalSize: must(meter.Int64Gauge(
 			"mem_node_total_size",
