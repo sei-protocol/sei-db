@@ -230,39 +230,60 @@ func printResultsToConsole(moduleResults map[string]*ModuleResult) {
 		fmt.Printf("Module %s total numKeys:%d, total keySize:%d, total valueSize:%d, totalSize: %d \n",
 			result.ModuleName, result.TotalNumKeys, result.TotalKeySize, result.TotalValueSize, result.TotalSize)
 
-		prefixKeyResult, _ := json.MarshalIndent(result.PrefixSizes[moduleName].KeySize, "", "  ")
-		fmt.Printf("Module %s prefix key size breakdown (bytes): %s \n", result.ModuleName, prefixKeyResult)
-
-		prefixValueResult, _ := json.MarshalIndent(result.PrefixSizes[moduleName].ValueSize, "", "  ")
-		fmt.Printf("Module %s prefix value size breakdown (bytes): %s \n", result.ModuleName, prefixValueResult)
-
-		totalSizeResult, _ := json.MarshalIndent(result.PrefixSizes[moduleName].TotalSize, "", "  ")
-		fmt.Printf("Module %s prefix total size breakdown (bytes): %s \n", result.ModuleName, totalSizeResult)
-
-		numKeysResult, _ := json.MarshalIndent(result.PrefixSizes[moduleName].KeyCount, "", "  ")
-		fmt.Printf("Module %s prefix num of keys breakdown: %s \n", result.ModuleName, numKeysResult)
-
-		// Display top contracts (already limited to top 100)
-		fmt.Printf("\nDetailed breakdown for 0x03 prefix (top %d contracts by total size):\n", len(result.ContractSizes))
-		fmt.Printf("%-42s %15s %10s\n", "Contract Address", "Total Size", "Key Count")
-		fmt.Printf("%s\n", strings.Repeat("-", 70))
-
-		// Convert to slice for display
-		var contractSlice []utils.ContractSizeEntry
-		for _, entry := range result.ContractSizes {
-			contractSlice = append(contractSlice, *entry)
+		prefixKeySizes := make(map[string]uint64)
+		prefixValueSizes := make(map[string]uint64)
+		prefixTotalSizes := make(map[string]uint64)
+		prefixKeyCounts := make(map[string]uint64)
+		for prefix, data := range result.PrefixSizes {
+			prefixKeySizes[prefix] = data.KeySize
+			prefixValueSizes[prefix] = data.ValueSize
+			prefixTotalSizes[prefix] = data.TotalSize
+			prefixKeyCounts[prefix] = data.KeyCount
 		}
 
-		// Sort by total size in descending order for display
-		sort.Slice(contractSlice, func(i, j int) bool {
-			return contractSlice[i].TotalSize > contractSlice[j].TotalSize
-		})
+		prefixKeyResult, _ := json.MarshalIndent(prefixKeySizes, "", "  ")
+		fmt.Printf("Module %s prefix key size breakdown (bytes): %s \n", result.ModuleName, prefixKeyResult)
 
-		for _, contract := range contractSlice {
-			fmt.Printf("0x%-40s %15d %10d\n",
-				contract.Address,
-				contract.TotalSize,
-				contract.KeyCount)
+		prefixValueResult, _ := json.MarshalIndent(prefixValueSizes, "", "  ")
+		fmt.Printf("Module %s prefix value size breakdown (bytes): %s \n", result.ModuleName, prefixValueResult)
+
+		totalSizeResult, _ := json.MarshalIndent(prefixTotalSizes, "", "  ")
+		fmt.Printf("Module %s prefix total size breakdown (bytes): %s \n", result.ModuleName, totalSizeResult)
+
+		numKeysResult, _ := json.MarshalIndent(prefixKeyCounts, "", "  ")
+		fmt.Printf("Module %s prefix num of keys breakdown: %s \n", result.ModuleName, numKeysResult)
+
+		if moduleName == "evm" {
+			var prefix03Count uint64
+			if prefixData, ok := result.PrefixSizes["03"]; ok {
+				prefix03Count = prefixData.KeyCount
+			}
+			fmt.Printf("Module %s total keys under prefix 0x03: %d\n", result.ModuleName, prefix03Count)
+
+			if len(result.ContractSizes) > 0 {
+				// Display top contracts (already limited to top 100)
+				fmt.Printf("\nDetailed breakdown for 0x03 prefix (top %d contracts by total size):\n", len(result.ContractSizes))
+				fmt.Printf("%-42s %15s %10s\n", "Contract Address", "Total Size", "Key Count")
+				fmt.Printf("%s\n", strings.Repeat("-", 70))
+
+				// Convert to slice for display
+				var contractSlice []utils.ContractSizeEntry
+				for _, entry := range result.ContractSizes {
+					contractSlice = append(contractSlice, *entry)
+				}
+
+				// Sort by total size in descending order for display
+				sort.Slice(contractSlice, func(i, j int) bool {
+					return contractSlice[i].TotalSize > contractSlice[j].TotalSize
+				})
+
+				for _, contract := range contractSlice {
+					fmt.Printf("0x%-40s %15d %10d\n",
+						contract.Address,
+						contract.TotalSize,
+						contract.KeyCount)
+				}
+			}
 		}
 	}
 }
