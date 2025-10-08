@@ -9,12 +9,14 @@ import (
 	"sort"
 
 	"github.com/alitto/pond"
+	"golang.org/x/exp/slices"
+
 	"github.com/cosmos/iavl"
 	"github.com/sei-protocol/sei-db/common/errors"
+	"github.com/sei-protocol/sei-db/common/metrics"
 	"github.com/sei-protocol/sei-db/common/utils"
 	"github.com/sei-protocol/sei-db/proto"
 	"github.com/sei-protocol/sei-db/stream/types"
-	"golang.org/x/exp/slices"
 )
 
 const MetadataFileName = "__metadata"
@@ -136,7 +138,7 @@ func (t *MultiTree) SetInitialVersion(initialVersion int64) error {
 	}
 
 	for _, entry := range t.trees {
-		if !entry.Tree.IsEmpty() {
+		if !entry.IsEmpty() {
 			return fmt.Errorf("tree is not empty: %s", entry.Name)
 		}
 	}
@@ -146,16 +148,20 @@ func (t *MultiTree) SetInitialVersion(initialVersion int64) error {
 }
 
 func (t *MultiTree) setInitialVersion(initialVersion int64) {
-	t.initialVersion = uint32(initialVersion)
+	if initialVersion < 0 || initialVersion > math.MaxUint32 {
+		panic(fmt.Sprintf("initial version %d is out of range", initialVersion))
+	}
+	iv := uint32(initialVersion)
+	t.initialVersion = iv
 	for _, entry := range t.trees {
-		entry.Tree.initialVersion = t.initialVersion
+		entry.initialVersion = t.initialVersion
 	}
 }
 
 func (t *MultiTree) SetZeroCopy(zeroCopy bool) {
 	t.zeroCopy = zeroCopy
 	for _, entry := range t.trees {
-		entry.Tree.SetZeroCopy(zeroCopy)
+		entry.SetZeroCopy(zeroCopy)
 	}
 }
 
@@ -164,7 +170,7 @@ func (t *MultiTree) Copy(cacheSize int) *MultiTree {
 	trees := make([]NamedTree, len(t.trees))
 	treesByName := make(map[string]int, len(t.trees))
 	for i, entry := range t.trees {
-		tree := entry.Tree.Copy(cacheSize)
+		tree := entry.Copy(cacheSize)
 		trees[i] = NamedTree{Tree: tree, Name: entry.Name}
 		treesByName[entry.Name] = i
 	}
@@ -225,7 +231,12 @@ func (t *MultiTree) ApplyUpgrades(upgrades []*proto.TreeNameUpgrade) error {
 			t.trees[i].Name = upgrade.Name
 		default:
 			// add tree
-			tree := NewWithInitialVersion(uint32(utils.NextVersion(t.Version(), t.initialVersion)))
+			v := utils.NextVersion(t.Version(), t.initialVersion)
+			if v < 0 || v > math.MaxUint32 {
+				return fmt.Errorf("version overflows uint32: %d", v)
+			}
+			version := uint32(v)
+			tree := NewWithInitialVersion(version)
 			t.trees = append(t.trees, NamedTree{Tree: tree, Name: upgrade.Name})
 		}
 	}
@@ -250,7 +261,8 @@ func (t *MultiTree) ApplyChangeSet(name string, changeSet iavl.ChangeSet) error 
 	if !found {
 		return fmt.Errorf("unknown tree name %s", name)
 	}
-	t.trees[i].Tree.ApplyChangeSet(changeSet)
+	metrics.SeiDBMetrics.NumOfKVPairs.Add(context.Background(), int64(len(changeSet.Pairs)))
+	t.trees[i].ApplyChangeSet(changeSet)
 	return nil
 }
 
@@ -274,7 +286,7 @@ func (t *MultiTree) WorkingCommitInfo() *proto.CommitInfo {
 func (t *MultiTree) SaveVersion(updateCommitInfo bool) (int64, error) {
 	t.lastCommitInfo.Version = utils.NextVersion(t.lastCommitInfo.Version, t.initialVersion)
 	for _, entry := range t.trees {
-		if _, _, err := entry.Tree.SaveVersion(updateCommitInfo); err != nil {
+		if _, _, err := entry.SaveVersion(updateCommitInfo); err != nil {
 			return 0, err
 		}
 	}
@@ -295,8 +307,8 @@ func (t *MultiTree) buildCommitInfo(version int64) *proto.CommitInfo {
 		infos = append(infos, proto.StoreInfo{
 			Name: entry.Name,
 			CommitId: proto.CommitID{
-				Version: entry.Tree.Version(),
-				Hash:    entry.Tree.RootHash(),
+				Version: entry.Version(),
+				Hash:    entry.RootHash(),
 			},
 		})
 	}
@@ -376,7 +388,7 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 }
 
 func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.WorkerPool) error {
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil { //nolint:gosec
 		return err
 	}
 
@@ -408,7 +420,7 @@ func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.Work
 
 // WriteFileSync calls `f.Sync` after before closing the file
 func WriteFileSync(name string, data []byte) error {
-	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm)
+	f, err := os.OpenFile(filepath.Clean(name), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm) //nolint:gosec
 	if err != nil {
 		return err
 	}
@@ -425,7 +437,7 @@ func WriteFileSync(name string, data []byte) error {
 func (t *MultiTree) Close() error {
 	errs := make([]error, 0, len(t.trees))
 	for _, entry := range t.trees {
-		errs = append(errs, entry.Tree.Close())
+		errs = append(errs, entry.Close())
 	}
 	t.trees = nil
 	t.treesByName = nil
@@ -436,7 +448,7 @@ func (t *MultiTree) Close() error {
 func (t *MultiTree) ReplaceWith(other *MultiTree) error {
 	errs := make([]error, 0, len(t.trees))
 	for _, entry := range t.trees {
-		errs = append(errs, entry.Tree.ReplaceWith(other.TreeByName(entry.Name)))
+		errs = append(errs, entry.ReplaceWith(other.TreeByName(entry.Name)))
 	}
 	t.treesByName = other.treesByName
 	t.lastCommitInfo = other.lastCommitInfo
@@ -446,7 +458,7 @@ func (t *MultiTree) ReplaceWith(other *MultiTree) error {
 
 func readMetadata(dir string) (*proto.MultiTreeMetadata, error) {
 	// load commit info
-	bz, err := os.ReadFile(filepath.Join(dir, MetadataFileName))
+	bz, err := os.ReadFile(filepath.Join(filepath.Clean(dir), MetadataFileName))
 	if err != nil {
 		return nil, err
 	}
