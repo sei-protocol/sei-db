@@ -114,7 +114,7 @@ func (db *Database) GetLatestVersion() int64 {
 		return 0
 	}
 
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	var latestHeight int64
 	if err := stmt.QueryRow(reservedStoreKey, keyLatestHeight).Scan(&latestHeight); err != nil {
@@ -147,7 +147,7 @@ func (db *Database) SetEarliestVersion(version int64, ignoreVersion bool) error 
 
 func (db *Database) Has(storeKey string, version int64, key []byte) (bool, error) {
 	val, err := db.Get(storeKey, version, key)
-	if err != nil && !errors.Is(err, errorutils.ErrRecordNotFound) {
+	if err != nil {
 		return false, err
 	}
 
@@ -164,13 +164,17 @@ func (db *Database) Get(storeKey string, targetVersion int64, key []byte) ([]byt
 		return nil, fmt.Errorf("failed to prepare SQL statement: %w", err)
 	}
 
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	var (
 		value []byte
 		tomb  int64
 	)
 	if err := stmt.QueryRow(storeKey, key, targetVersion).Scan(&value, &tomb); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+
 		return nil, fmt.Errorf("failed to query row: %w", err)
 	}
 
@@ -287,7 +291,7 @@ func (db *Database) PrintRowsDebug() {
 		panic(fmt.Errorf("failed to prepare SQL statement: %w", err))
 	}
 
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	rows, err := stmt.Query()
 	if err != nil {
