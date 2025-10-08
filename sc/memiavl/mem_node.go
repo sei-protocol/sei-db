@@ -44,9 +44,6 @@ func newBranchNode(
 }
 
 func newLeafNode(key, value []byte, version uint32) *MemNode {
-	TotalNumOfMemNode.Add(1)
-	// Total struct size = 120 bytes
-	TotalMemNodeSize.Add(int64(120 + len(key) + len(value)))
 	return &MemNode{
 		key: key, value: value, version: version, size: 1,
 	}
