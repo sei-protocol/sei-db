@@ -22,12 +22,11 @@ func setupTestDB(t *testing.T) (*Database, string) {
 
 	// Set up config with hash range enabled
 	cfg := config.StateStoreConfig{
-		HashRange:          10, // 10 blocks per hash range
-		AsyncWriteBuffer:   100,
-		KeepRecent:         100,
-		KeepLastVersion:    true,
-		ImportNumWorkers:   4,
-		DedicatedChangelog: false,
+		HashRange:        10, // 10 blocks per hash range
+		AsyncWriteBuffer: 100,
+		KeepRecent:       100,
+		KeepLastVersion:  true,
+		ImportNumWorkers: 4,
 	}
 
 	db, err := New(tempDir, cfg)
