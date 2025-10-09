@@ -172,12 +172,12 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 }
 
 func (db *Database) Close() error {
-	// First, stop accepting new pending changes and drain the worker
-	close(db.pendingChanges)
-	// Wait for the async writes to finish
-	db.asyncWriteWG.Wait()
-	// Now close the WAL stream
 	if db.streamHandler != nil {
+		// First, stop accepting new pending changes and drain the worker
+		close(db.pendingChanges)
+		// Wait for the async writes to finish
+		db.asyncWriteWG.Wait()
+		// Now close the WAL stream
 		_ = db.streamHandler.Close()
 		db.streamHandler = nil
 	}

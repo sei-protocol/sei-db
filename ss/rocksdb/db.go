@@ -492,13 +492,13 @@ func (db *Database) WriteBlockRangeHash(storeKey string, beginBlockRange, endBlo
 }
 
 func (db *Database) Close() error {
-	// Close the pending changes channel to signal the background goroutine to stop
-	close(db.pendingChanges)
-	// Wait for the async writes to finish processing all buffered items
-	db.asyncWriteWG.Wait()
 	if db.streamHandler != nil {
+		// Close the pending changes channel to signal the background goroutine to stop
+		close(db.pendingChanges)
+		// Wait for the async writes to finish processing all buffered items
+		db.asyncWriteWG.Wait()
 		// Close the changelog stream first
-		db.streamHandler.Close()
+		_ = db.streamHandler.Close()
 		// Only set to nil after background goroutine has finished
 		db.streamHandler = nil
 	}
