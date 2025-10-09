@@ -339,7 +339,7 @@ func TestAsyncComputeMissingRanges(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait a bit for the async computation to complete
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	// We should now have hashed up to version 30 (3 complete ranges)
 	lastHashed, err := db.GetLastRangeHashed()
