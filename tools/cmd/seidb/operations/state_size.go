@@ -1,6 +1,7 @@
 package operations
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -82,17 +83,25 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 		ContractSizes: make(map[string]*utils.ContractSizeEntry),
 	}
 
+	prefix0BFirst := make([]string, 0, 100)
+	prefix0BLast := make([]string, 0, 100)
+
 	// Scan the tree to collect statistics
 	tree.ScanPostOrder(func(node memiavl.Node) bool {
 		if node.IsLeaf() {
 			result.TotalNumKeys++
-			keySize := len(node.Key())
-			valueSize := len(node.Value())
+			key := node.Key()
+			value := node.Value()
+			keySize := len(key)
+			valueSize := len(value)
 			result.TotalKeySize += uint64(keySize)
 			result.TotalValueSize += uint64(valueSize)
 			result.TotalSize += uint64(keySize + valueSize)
 
-			prefixKey := fmt.Sprintf("%X", node.Key())
+			prefixKey := fmt.Sprintf("%X", key)
+			if len(prefixKey) < 2 {
+				return true
+			}
 			prefix := prefixKey[:2]
 			if _, exists := result.PrefixSizes[prefix]; !exists {
 				result.PrefixSizes[prefix] = &utils.PrefixSize{}
@@ -101,6 +110,20 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 			result.PrefixSizes[prefix].ValueSize += uint64(valueSize)
 			result.PrefixSizes[prefix].TotalSize += uint64(keySize + valueSize)
 			result.PrefixSizes[prefix].KeyCount++
+
+			if prefix == "0B" {
+				txHash := keyToTxHash(key)
+				if txHash != "" {
+					if len(prefix0BFirst) < 100 {
+						prefix0BFirst = append(prefix0BFirst, txHash)
+					}
+					if len(prefix0BLast) == 100 {
+						prefix0BLast = append(prefix0BLast[1:], txHash)
+					} else {
+						prefix0BLast = append(prefix0BLast, txHash)
+					}
+				}
+			}
 
 			// Handle EVM contract analysis
 			if moduleName == "evm" && prefix == "03" {
@@ -122,6 +145,8 @@ func collectModuleStats(tree *memiavl.Tree, moduleName string) *ModuleResult {
 
 	// Limit to top 100 contracts by total size
 	result.ContractSizes = limitToTopContracts(result.ContractSizes, 100)
+	result.Prefix0BFirstTxHashes = prefix0BFirst
+	result.Prefix0BLastTxHashes = prefix0BLast
 
 	return result
 }
@@ -153,15 +178,34 @@ func limitToTopContracts(contracts map[string]*utils.ContractSizeEntry, limit in
 	return result
 }
 
+func keyToTxHash(key []byte) string {
+	if len(key) == 0 {
+		return ""
+	}
+
+	txBytes := key
+	if key[0] == 0x0B {
+		txBytes = key[1:]
+	}
+
+	if len(txBytes) == 0 {
+		return ""
+	}
+
+	return "0x" + hex.EncodeToString(txBytes)
+}
+
 // ModuleResult holds the complete analysis results for a single module
 type ModuleResult struct {
-	ModuleName     string
-	TotalNumKeys   uint64
-	TotalKeySize   uint64
-	TotalValueSize uint64
-	TotalSize      uint64
-	PrefixSizes    map[string]*utils.PrefixSize
-	ContractSizes  map[string]*utils.ContractSizeEntry
+	ModuleName            string
+	TotalNumKeys          uint64
+	TotalKeySize          uint64
+	TotalValueSize        uint64
+	TotalSize             uint64
+	PrefixSizes           map[string]*utils.PrefixSize
+	ContractSizes         map[string]*utils.ContractSizeEntry
+	Prefix0BFirstTxHashes []string
+	Prefix0BLastTxHashes  []string
 }
 
 // collectAllModuleData scans all modules and collects statistics in memory
@@ -252,6 +296,20 @@ func printResultsToConsole(moduleResults map[string]*ModuleResult) {
 
 		numKeysResult, _ := json.MarshalIndent(prefixKeyCounts, "", "  ")
 		fmt.Printf("Module %s prefix num of keys breakdown: %s \n", result.ModuleName, numKeysResult)
+
+		if len(result.Prefix0BFirstTxHashes) > 0 {
+			fmt.Printf("Prefix 0x0B first %d tx hashes:\n", len(result.Prefix0BFirstTxHashes))
+			for _, hash := range result.Prefix0BFirstTxHashes {
+				fmt.Println(hash)
+			}
+		}
+
+		if len(result.Prefix0BLastTxHashes) > 0 {
+			fmt.Printf("Prefix 0x0B last %d tx hashes:\n", len(result.Prefix0BLastTxHashes))
+			for _, hash := range result.Prefix0BLastTxHashes {
+				fmt.Println(hash)
+			}
+		}
 
 		if moduleName == "evm" {
 			var prefix03Count uint64
