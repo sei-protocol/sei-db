@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -90,6 +91,13 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 		fileLock FileLock
 	)
 
+	// Maximize CPU utilization: set GOMAXPROCS to use all available cores
+	// This is critical for I/O-bound workloads where goroutines wait for disk
+	// By using all cores, OS can schedule other goroutines while some wait for I/O
+	numCPU := runtime.NumCPU()
+	prevGOMAXPROCS := runtime.GOMAXPROCS(numCPU)
+	logger.Info("Set GOMAXPROCS for parallel tree processing", "prev", prevGOMAXPROCS, "new", numCPU)
+
 	if err := opts.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid commit store options: %w", err)
 	}
@@ -138,6 +146,10 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 	if err != nil {
 		return nil, err
 	}
+
+	// Prefetch disabled: too slow on EBS volumes (35min for 60GB is unacceptable)
+	// Using top-level key cache instead to reduce random kvs access during replay
+	logger.Info("=== PREFETCH DISABLED ===", "reason", "slow disk, using key cache optimization")
 
 	if targetVersion == 0 || targetVersion > mtree.Version() {
 		logger.Info("Start catching up and replaying the MemIAVL changelog file")
@@ -214,6 +226,9 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 	}
 	return db, nil
 }
+
+// Prefetch functions removed: EBS disk IO too slow (35min for 60GB unacceptable)
+// Using batched sorted replay in multitree.go instead
 
 func removeTmpDirs(rootDir string) error {
 	entries, err := os.ReadDir(rootDir)

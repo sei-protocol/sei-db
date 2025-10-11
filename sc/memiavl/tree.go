@@ -129,18 +129,75 @@ func (t *Tree) ApplyChangeSetAsync(changeSet iavl.ChangeSet) {
 }
 
 func (t *Tree) StartBackgroundWrite() {
+	t.startBackgroundWrite(1000, "")
+}
+
+func (t *Tree) StartBackgroundWriteLargeBuffer() {
+	t.startBackgroundWriteLargeBuffer(2000000, "") // 2M buffer for cold start replay to prevent blocking
+}
+
+func (t *Tree) startBackgroundWrite(bufferSize int, treeName string) {
+	if t.pendingChanges != nil {
+		return // Already started
+	}
 	t.pendingWg.Add(1)
-	t.pendingChanges = make(chan iavl.ChangeSet, 1000)
+	t.pendingChanges = make(chan iavl.ChangeSet, bufferSize)
 	go func() {
 		defer t.pendingWg.Done()
+		var processedCount int
+		var totalPairs int64
+		var totalKeyBytes int64
+		var totalValueBytes int64
+
 		for nextChange := range t.pendingChanges {
+			// Track changeset stats
+			pairCount := len(nextChange.Pairs)
+			totalPairs += int64(pairCount)
+			for _, pair := range nextChange.Pairs {
+				totalKeyBytes += int64(len(pair.Key))
+				totalValueBytes += int64(len(pair.Value))
+			}
+
 			t.ApplyChangeSet(nextChange)
 			_, _, _ = t.SaveVersion(false)
+			processedCount++
+
+			// Print consumer progress for monitoring (only for trees with high volume)
+			if processedCount%10000 == 0 {
+				avgPairs := float64(totalPairs) / float64(processedCount)
+				avgKeySize := float64(totalKeyBytes) / float64(totalPairs)
+				avgValueSize := float64(totalValueBytes) / float64(totalPairs)
+				if treeName != "" {
+					fmt.Printf("[CONSUMER] Tree %s processed %d changesets (buffer=%d, avg_pairs=%.1f, avg_key=%.0fB, avg_val=%.0fB)\n",
+						treeName, processedCount, len(t.pendingChanges), avgPairs, avgKeySize, avgValueSize)
+				} else {
+					fmt.Printf("[CONSUMER] Tree processed %d changesets (buffer=%d, avg_pairs=%.1f)\n",
+						processedCount, len(t.pendingChanges), avgPairs)
+				}
+			}
+		}
+
+		avgPairs := float64(totalPairs) / float64(processedCount)
+		avgKeySize := float64(totalKeyBytes) / float64(totalPairs)
+		avgValueSize := float64(totalValueBytes) / float64(totalPairs)
+		if treeName != "" {
+			fmt.Printf("[CONSUMER] Tree %s completed: %d changesets, avg %.1f pairs/cs (%.0fB key, %.0fB val), total %d pairs\n",
+				treeName, processedCount, avgPairs, avgKeySize, avgValueSize, totalPairs)
+		} else {
+			fmt.Printf("[CONSUMER] Tree completed: %d changesets, avg %.1f pairs/changeset\n",
+				processedCount, avgPairs)
 		}
 	}()
 }
 
+func (t *Tree) startBackgroundWriteLargeBuffer(bufferSize int, treeName string) {
+	t.startBackgroundWrite(bufferSize, treeName)
+}
+
 func (t *Tree) WaitToCompleteAsyncWrite() {
+	if t.pendingChanges == nil {
+		return // Not started
+	}
 	close(t.pendingChanges)
 	t.pendingWg.Wait()
 	t.pendingChanges = nil

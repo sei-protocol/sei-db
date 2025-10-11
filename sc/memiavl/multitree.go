@@ -83,12 +83,14 @@ func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error)
 		}
 		name := e.Name()
 		treeNames = append(treeNames, name)
+		fmt.Printf("[LOADING] Opening snapshot for tree: %s\n", name)
 		snapshot, err := OpenSnapshot(filepath.Join(dir, name))
 		if err != nil {
 			return nil, err
 		}
 		treeMap[name] = NewFromSnapshot(snapshot, zeroCopy, cacheSize)
 	}
+	fmt.Printf("[LOADING] All %d trees loaded successfully\n", len(treeNames))
 
 	slices.Sort(treeNames)
 
@@ -224,9 +226,28 @@ func (t *MultiTree) ApplyUpgrades(upgrades []*proto.TreeNameUpgrade) error {
 			}
 			t.trees[i].Name = upgrade.Name
 		default:
-			// add tree
+			// add tree (dynamically created during replay, e.g., acc/bank/evm at ~216K)
 			tree := NewWithInitialVersion(uint32(utils.NextVersion(t.Version(), t.initialVersion)))
-			t.trees = append(t.trees, NamedTree{Tree: tree, Name: upgrade.Name})
+			newTree := NamedTree{Tree: tree, Name: upgrade.Name}
+			t.trees = append(t.trees, newTree)
+
+			// CRITICAL: Start background worker for newly created tree immediately
+			// Use aggressive buffer sizes for known large trees (128GB machine)
+			bufferSize := 5000000 // 5M default
+			switch upgrade.Name {
+			case "evm":
+				bufferSize = 100000000 // 100M for EVM
+				fmt.Printf("[TREE UPGRADE] Created tree '%s' with ultra buffer (100M)\n", upgrade.Name)
+			case "acc", "bank":
+				bufferSize = 50000000 // 50M for acc/bank
+				fmt.Printf("[TREE UPGRADE] Created tree '%s' with huge buffer (50M)\n", upgrade.Name)
+			case "dex":
+				bufferSize = 20000000 // 20M for dex
+				fmt.Printf("[TREE UPGRADE] Created tree '%s' with large buffer (20M)\n", upgrade.Name)
+			default:
+				fmt.Printf("[TREE UPGRADE] Created tree '%s' with standard buffer (5M)\n", upgrade.Name)
+			}
+			tree.startBackgroundWriteLargeBuffer(bufferSize, upgrade.Name)
 		}
 	}
 
@@ -339,6 +360,29 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 		return fmt.Errorf("target index %d is in the future, latest index: %d", endIndex, lastIndex)
 	}
 
+	// Start async write workers for each tree with LARGE buffer for cold start
+	// 128GB machine: we can be very aggressive with buffer sizes (~60GB total)
+	// This allows publisher to complete quickly without blocking on slow trees
+	fmt.Printf("[REPLAY INIT] Starting background workers for %d existing trees\n", len(t.trees))
+	for _, namedTree := range t.trees {
+		bufferSize := 5000000 // 5M default (was 2M)
+
+		// Ultra-large buffers for massive trees (NOTE: acc/bank/evm created dynamically at ~216K)
+		if namedTree.Name == "evm" {
+			bufferSize = 100000000 // 100M for EVM (481M nodes, 80GB)
+			fmt.Printf("[REPLAY INIT] Ultra buffer (100M, ~20GB RAM) for tree: %s\n", namedTree.Name)
+		} else if namedTree.Name == "acc" || namedTree.Name == "bank" {
+			bufferSize = 50000000 // 50M for acc/bank (72M-130M nodes, 17-19GB each)
+			fmt.Printf("[REPLAY INIT] Huge buffer (50M, ~10GB RAM) for tree: %s\n", namedTree.Name)
+		} else if namedTree.Name == "dex" {
+			bufferSize = 20000000 // 20M for dex (if large)
+			fmt.Printf("[REPLAY INIT] Large buffer (20M, ~4GB RAM) for tree: %s\n", namedTree.Name)
+		}
+
+		namedTree.Tree.startBackgroundWriteLargeBuffer(bufferSize, namedTree.Name)
+	}
+	fmt.Printf("[REPLAY INIT] Background workers started, estimated buffer memory: ~60GB for large trees when created\n")
+
 	var replayCount = 0
 	err = stream.Replay(firstIndex, endIndex, func(index uint64, entry proto.ChangelogEntry) error {
 		if err := t.ApplyUpgrades(entry.Upgrades); err != nil {
@@ -359,11 +403,12 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 		t.lastCommitInfo.StoreInfos = []proto.StoreInfo{}
 		replayCount++
 		if replayCount%1000 == 0 {
-			fmt.Printf("Replayed %d changelog entries\n", replayCount)
+			fmt.Printf("Replayed %d changelog entries (key cache, async)\n", replayCount)
 		}
 		return nil
 	})
 
+	// Wait for all async writes to complete
 	for _, tree := range t.trees {
 		tree.WaitToCompleteAsyncWrite()
 	}

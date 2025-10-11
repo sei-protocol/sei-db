@@ -2,6 +2,7 @@ package memiavl
 
 import (
 	"errors"
+	"runtime"
 
 	"github.com/sei-protocol/sei-db/config"
 )
@@ -35,6 +36,14 @@ type Options struct {
 
 	// Limit the number of concurrent snapshot writers
 	SnapshotWriterLimit int
+
+	// PrefetchOnStartup enables sequential page-cache warmup of snapshot files
+	// (nodes/leaves and, optionally, kvs) before replaying the changelog.
+	PrefetchOnStartup bool
+	// PrefetchIncludeKVs controls whether to include the large kvs file in the warmup.
+	PrefetchIncludeKVs bool
+	// PrefetchConcurrency limits number of stores warmed in parallel; <=0 defaults to NumCPU.
+	PrefetchConcurrency int
 }
 
 func (opts Options) Validate() error {
@@ -60,5 +69,11 @@ func (opts *Options) FillDefaults() {
 
 	if opts.CacheSize < 0 {
 		opts.CacheSize = config.DefaultCacheSize
+	}
+
+	opts.SnapshotKeepRecent = config.DefaultSnapshotKeepRecent
+
+	if opts.PrefetchConcurrency <= 0 {
+		opts.PrefetchConcurrency = runtime.NumCPU()
 	}
 }
