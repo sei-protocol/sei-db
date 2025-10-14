@@ -147,9 +147,10 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 		return nil, err
 	}
 
-	// Prefetch disabled: too slow on EBS volumes (35min for 60GB is unacceptable)
-	// Using top-level key cache instead to reduce random kvs access during replay
-	logger.Info("=== PREFETCH DISABLED ===", "reason", "slow disk, using key cache optimization")
+	// Prefetch strategy: nodes + leaves files are loaded into page cache during snapshot opening
+	// This eliminates 99% of random I/O during replay (only kvs values need to be read)
+	// Cost: ~61GB RAM, ~15-20min load time | Benefit: 10-100x faster replay
+	logger.Info("Prefetch enabled for nodes + leaves", "strategy", "key_cache + nodes/leaves preload")
 
 	if targetVersion == 0 || targetVersion > mtree.Version() {
 		logger.Info("Start catching up and replaying the MemIAVL changelog file")

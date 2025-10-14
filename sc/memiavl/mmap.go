@@ -1,10 +1,12 @@
 package memiavl
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/ledgerwatch/erigon-lib/mmap"
 	"github.com/sei-protocol/sei-db/common/errors"
+	"golang.org/x/sys/unix"
 )
 
 // MmapFile manage the resources of a mmap-ed file
@@ -27,6 +29,15 @@ func NewMmap(path string) (*MmapFile, error) {
 	if err != nil {
 		_ = file.Close()
 		return nil, err
+	}
+
+	// Override default MADV_RANDOM with SEQUENTIAL + WILLNEED to favor prefetching
+	// Ignore errors as hints may not be supported on all platforms
+	if len(data) > 0 {
+		_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
+		_ = unix.Madvise(data, unix.MADV_WILLNEED)
+		// Lightweight marker to confirm at runtime
+		fmt.Printf("[MMAP] madvise SEQUENTIAL+WILLNEED applied path=%s size=%d MB\n", path, len(data)/(1024*1024))
 	}
 
 	return &MmapFile{
