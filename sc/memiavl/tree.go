@@ -23,6 +23,7 @@ type Tree struct {
 	// root node of empty tree is represented as `nil`
 	root     Node
 	snapshot *Snapshot
+	name     string
 
 	initialVersion, cowVersion uint32
 
@@ -64,13 +65,14 @@ func NewWithInitialVersion(initialVersion uint32) *Tree {
 }
 
 // NewFromSnapshot mmap the blob files and create the root node.
-func NewFromSnapshot(snapshot *Snapshot, zeroCopy bool, _ int) *Tree {
+func NewFromSnapshot(snapshot *Snapshot, zeroCopy bool, _ int, name string) *Tree {
 	tree := &Tree{
 		version:   snapshot.Version(),
 		snapshot:  snapshot,
 		zeroCopy:  zeroCopy,
 		mtx:       &sync.RWMutex{},
 		pendingWg: &sync.WaitGroup{},
+		name:      name,
 	}
 
 	if !snapshot.IsEmpty() {
@@ -116,6 +118,9 @@ func (t *Tree) ApplyChangeSet(changeSet iavl.ChangeSet) {
 		if pair.Delete {
 			t.Remove(pair.Key)
 		} else {
+			if t.name == "evm" {
+				fmt.Printf("[Debug] Apply for key %X\n", pair.Key)
+			}
 			t.Set(pair.Key, pair.Value)
 		}
 	}
