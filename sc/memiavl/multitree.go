@@ -89,7 +89,7 @@ func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error)
 		if err != nil {
 			return nil, err
 		}
-		treeMap[name] = NewFromSnapshot(snapshot, zeroCopy, cacheSize)
+		treeMap[name] = NewFromSnapshot(snapshot, zeroCopy, cacheSize, name)
 	}
 
 	slices.Sort(treeNames)
