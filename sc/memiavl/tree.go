@@ -118,9 +118,6 @@ func (t *Tree) ApplyChangeSet(changeSet iavl.ChangeSet) {
 		if pair.Delete {
 			t.Remove(pair.Key)
 		} else {
-			if t.name == "evm" {
-				fmt.Printf("[Debug] Apply for key %X\n", pair.Key)
-			}
 			t.Set(pair.Key, pair.Value)
 		}
 	}
@@ -135,7 +132,7 @@ func (t *Tree) ApplyChangeSetAsync(changeSet iavl.ChangeSet) {
 
 func (t *Tree) StartBackgroundWrite() {
 	t.pendingWg.Add(1)
-	t.pendingChanges = make(chan iavl.ChangeSet, 1000)
+	t.pendingChanges = make(chan iavl.ChangeSet, 10)
 	go func() {
 		defer t.pendingWg.Done()
 		for nextChange := range t.pendingChanges {

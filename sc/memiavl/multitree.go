@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/alitto/pond"
 	"github.com/cosmos/iavl"
@@ -315,6 +316,14 @@ func (t *MultiTree) UpdateCommitInfo() {
 
 // Catchup replay the new entries in the Rlog file on the tree to catch up to the target or latest version.
 func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersion int64) error {
+	startTime := time.Now()
+	latencyBreakdown := map[string]int64{}
+	defer func() {
+		fmt.Printf("[Debug] Total time to catch up: %s\n", time.Since(startTime))
+		for name, latency := range latencyBreakdown {
+			fmt.Printf("[Debug] Tree %s latency (nano) is: %d\n", name, latency)
+		}
+	}()
 	lastIndex, err := stream.LastOffset()
 	if err != nil {
 		return fmt.Errorf("read rlog last index failed, %w", err)
@@ -347,12 +356,16 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 		updatedTrees := make(map[string]bool)
 		for _, cs := range entry.Changesets {
 			treeName := cs.Name
+			startTime := time.Now()
 			t.TreeByName(treeName).ApplyChangeSetAsync(cs.Changeset)
+			latencyBreakdown[treeName] += time.Since(startTime).Nanoseconds()
 			updatedTrees[treeName] = true
 		}
 		for _, tree := range t.trees {
 			if _, found := updatedTrees[tree.Name]; !found {
+				startTime := time.Now()
 				tree.ApplyChangeSetAsync(iavl.ChangeSet{})
+				latencyBreakdown[tree.Name] += time.Since(startTime).Nanoseconds()
 			}
 		}
 		t.lastCommitInfo.Version = utils.NextVersion(t.lastCommitInfo.Version, t.initialVersion)
@@ -365,7 +378,9 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 	})
 
 	for _, tree := range t.trees {
+		startTime := time.Now()
 		tree.WaitToCompleteAsyncWrite()
+		latencyBreakdown[tree.Name] += time.Since(startTime).Nanoseconds()
 	}
 
 	if err != nil {
