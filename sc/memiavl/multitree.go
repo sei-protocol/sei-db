@@ -318,8 +318,9 @@ func (t *MultiTree) UpdateCommitInfo() {
 func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersion int64) error {
 	startTime := time.Now()
 	latencyBreakdown := map[string]int64{}
+	var replayCount = 0
 	defer func() {
-		fmt.Printf("[Debug] Total time to catch up: %s\n", time.Since(startTime))
+		fmt.Printf("[Debug] Total time to catch up %d entries: %s\n", replayCount, time.Since(startTime))
 		for name, latency := range latencyBreakdown {
 			fmt.Printf("[Debug] Tree %s latency (nano) is: %d\n", name, latency)
 		}
@@ -348,7 +349,6 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 		return fmt.Errorf("target index %d is in the future, latest index: %d", endIndex, lastIndex)
 	}
 
-	var replayCount = 0
 	err = stream.Replay(firstIndex, endIndex, func(index uint64, entry proto.ChangelogEntry) error {
 		if err := t.ApplyUpgrades(entry.Upgrades); err != nil {
 			return err
