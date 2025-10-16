@@ -20,6 +20,16 @@ type MmapFile struct {
 // Open openes the file and create the mmap.
 // the mmap is created with flags: PROT_READ, MAP_SHARED, MADV_RANDOM.
 func NewMmap(path string) (*MmapFile, error) {
+	return newMmapInternal(path, true)
+}
+
+// NewMmapNoPreload opens the file and creates mmap without prefetching hints
+// Used for small/inactive trees to avoid unnecessary OS prefetching
+func NewMmapNoPreload(path string) (*MmapFile, error) {
+	return newMmapInternal(path, false)
+}
+
+func newMmapInternal(path string, withPrefetch bool) (*MmapFile, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -31,13 +41,18 @@ func NewMmap(path string) (*MmapFile, error) {
 		return nil, err
 	}
 
-	// Override default MADV_RANDOM with SEQUENTIAL + WILLNEED to favor prefetching
-	// Ignore errors as hints may not be supported on all platforms
+	// Apply madvise hints based on prefetch flag
 	if len(data) > 0 {
-		_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
-		_ = unix.Madvise(data, unix.MADV_WILLNEED)
-		// Lightweight marker to confirm at runtime
-		fmt.Printf("[MMAP] madvise SEQUENTIAL+WILLNEED applied path=%s size=%d MB\n", path, len(data)/(1024*1024))
+		if withPrefetch {
+			// Override default MADV_RANDOM with SEQUENTIAL + WILLNEED to favor prefetching
+			_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
+			_ = unix.Madvise(data, unix.MADV_WILLNEED)
+			fmt.Printf("[MMAP] madvise SEQUENTIAL+WILLNEED applied path=%s size=%d MB\n", path, len(data)/(1024*1024))
+		} else {
+			// Keep default MADV_RANDOM, no prefetching
+			_ = unix.Madvise(data, unix.MADV_RANDOM)
+			fmt.Printf("[MMAP] madvise RANDOM (no prefetch) path=%s size=%d MB\n", path, len(data)/(1024*1024))
+		}
 	}
 
 	return &MmapFile{

@@ -86,6 +86,8 @@ const (
 )
 
 func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error) {
+	totalStartTime := time.Now()
+
 	var (
 		err      error
 		fileLock FileLock
@@ -160,6 +162,10 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 		}
 		logger.Info(fmt.Sprintf("Finished the replay and caught up to version %d", targetVersion))
 	}
+
+	// Print total startup time
+	totalElapsed := time.Since(totalStartTime).Seconds()
+	fmt.Printf("[STARTUP] Total time: %.1fs (load + replay)\n", totalElapsed)
 
 	if opts.LoadForOverwriting && targetVersion > 0 {
 		currentSnapshot, err := os.Readlink(currentPath(opts.Dir))

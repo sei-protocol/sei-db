@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"time"
 
 	"github.com/alitto/pond"
 	"github.com/cosmos/iavl"
@@ -65,6 +67,8 @@ func NewEmptyMultiTree(initialVersion uint32, cacheSize int) *MultiTree {
 }
 
 func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error) {
+	loadStartTime := time.Now()
+
 	metadata, err := readMetadata(dir)
 	if err != nil {
 		return nil, err
@@ -78,22 +82,69 @@ func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error)
 		return nil, err
 	}
 
+	// Parallel snapshot loading: load all trees concurrently to maximize disk throughput
+	// This is critical when multiple large trees need preloading (evm, bank, acc)
 	treeMap := make(map[string]*Tree, len(entries))
 	treeNames := make([]string, 0, len(entries))
+
+	// Collect all tree names first
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		name := e.Name()
-		treeNames = append(treeNames, name)
-		fmt.Printf("[LOADING] Opening snapshot for tree: %s\n", name)
-		snapshot, err := OpenSnapshot(filepath.Join(dir, name))
-		if err != nil {
-			return nil, err
-		}
-		treeMap[name] = NewFromSnapshot(snapshot, zeroCopy, cacheSize)
+		treeNames = append(treeNames, e.Name())
 	}
-	fmt.Printf("[LOADING] All %d trees loaded successfully\n", len(treeNames))
+
+	fmt.Printf("[LOADING] Starting parallel load of %d trees...\n", len(treeNames))
+
+	// Parallel loading using goroutines with concurrency limit
+	// Limit concurrent tree loading to avoid overwhelming the disk with too many goroutines
+	// Each tree's preload uses 32 goroutines, so 4 trees = 128 total goroutines
+	maxConcurrentTrees := 4
+	if v := os.Getenv("SEIDB_LOAD_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxConcurrentTrees = n
+		}
+	}
+
+	type loadResult struct {
+		name     string
+		snapshot *Snapshot
+		err      error
+	}
+
+	results := make(chan loadResult, len(treeNames))
+	semaphore := make(chan struct{}, maxConcurrentTrees)
+
+	for _, name := range treeNames {
+		name := name // capture loop variable
+		go func() {
+			semaphore <- struct{}{}        // acquire
+			defer func() { <-semaphore }() // release
+
+			fmt.Printf("[LOADING] Opening snapshot for tree: %s\n", name)
+			treeStart := time.Now()
+			snapshot, err := OpenSnapshot(filepath.Join(dir, name))
+			elapsed := time.Since(treeStart).Seconds()
+			if err == nil {
+				fmt.Printf("[LOADING] Tree '%s' loaded in %.1fs\n", name, elapsed)
+			}
+			results <- loadResult{name: name, snapshot: snapshot, err: err}
+		}()
+	}
+
+	// Collect results
+	for i := 0; i < len(treeNames); i++ {
+		result := <-results
+		if result.err != nil {
+			return nil, result.err
+		}
+		treeMap[result.name] = NewFromSnapshot(result.snapshot, zeroCopy, cacheSize)
+	}
+	close(results)
+
+	loadElapsed := time.Since(loadStartTime).Seconds()
+	fmt.Printf("[LOADING] All %d trees loaded in %.1fs (parallel preload)\n", len(treeNames), loadElapsed)
 
 	slices.Sort(treeNames)
 
@@ -386,6 +437,7 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 	}
 	fmt.Printf("[REPLAY INIT] Background workers started, estimated buffer memory: ~60GB for large trees when created\n")
 
+	replayStartTime := time.Now()
 	var replayCount = 0
 	err = stream.Replay(firstIndex, endIndex, func(index uint64, entry proto.ChangelogEntry) error {
 		if err := t.ApplyUpgrades(entry.Upgrades); err != nil {
@@ -408,20 +460,30 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 		if replayCount%1000 == 0 {
 			fmt.Printf("[PRODUCER] Replayed %d changelog entries (dispatched to all trees)\n", replayCount)
 		}
+		// Extra diagnostic: print every 100 entries after 8000 to diagnose slowdown
+		if replayCount > 8000 && replayCount%100 == 0 {
+			fmt.Printf("[PRODUCER] Progress: %d entries (checking for slowdown...)\n", replayCount)
+		}
 		return nil
 	})
 
 	// Wait for all async writes to complete
+	fmt.Printf("[REPLAY] Waiting for all consumers to complete processing...\n")
+	waitStartTime := time.Now()
 	for _, tree := range t.trees {
 		tree.WaitToCompleteAsyncWrite()
 	}
+	waitElapsed := time.Since(waitStartTime).Seconds()
+	fmt.Printf("[REPLAY] All consumers completed in %.1fs\n", waitElapsed)
 
 	if err != nil {
 		return err
 	}
 
-	// Print final summary
-	fmt.Printf("[PRODUCER] Replay complete: dispatched %d changelog entries to all trees\n", replayCount)
+	// Print final summary with timing
+	replayElapsed := time.Since(replayStartTime).Seconds()
+	fmt.Printf("[REPLAY] Total: %d entries in %.1fs (%.1f entries/sec, wait=%.1fs)\n",
+		replayCount, replayElapsed, float64(replayCount)/replayElapsed, waitElapsed)
 
 	t.UpdateCommitInfo()
 	return nil
