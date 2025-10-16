@@ -148,9 +148,10 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 	}
 
 	// Prefetch strategy: nodes + leaves files are loaded into page cache during snapshot opening
-	// This eliminates 99% of random I/O during replay (only kvs values need to be read)
-	// Cost: ~61GB RAM, ~15-20min load time | Benefit: 10-100x faster replay
-	logger.Info("Prefetch enabled for nodes + leaves", "strategy", "key_cache + nodes/leaves preload")
+	// Split keys (branch nodes) are naturally cached in page cache after first access
+	// This eliminates most random I/O during replay, relying on OS page cache management
+	// Cost: ~61GB RAM, ~3min load time | Benefit: 10-100x faster replay
+	logger.Info("Prefetch enabled for nodes + leaves", "strategy", "nodes/leaves preload + natural page cache")
 
 	if targetVersion == 0 || targetVersion > mtree.Version() {
 		logger.Info("Start catching up and replaying the MemIAVL changelog file")

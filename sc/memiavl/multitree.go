@@ -70,6 +70,9 @@ func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error)
 		return nil, err
 	}
 
+	// Print snapshot version information
+	fmt.Printf("[SNAPSHOT] Loading snapshot version: %d from directory: %s\n", metadata.CommitInfo.Version, dir)
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -403,7 +406,7 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 		t.lastCommitInfo.StoreInfos = []proto.StoreInfo{}
 		replayCount++
 		if replayCount%1000 == 0 {
-			fmt.Printf("Replayed %d changelog entries (key cache, async)\n", replayCount)
+			fmt.Printf("[PRODUCER] Replayed %d changelog entries (dispatched to all trees)\n", replayCount)
 		}
 		return nil
 	})
@@ -416,6 +419,10 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 	if err != nil {
 		return err
 	}
+
+	// Print final summary
+	fmt.Printf("[PRODUCER] Replay complete: dispatched %d changelog entries to all trees\n", replayCount)
+
 	t.UpdateCommitInfo()
 	return nil
 }

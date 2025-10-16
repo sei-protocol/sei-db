@@ -53,11 +53,6 @@ type Snapshot struct {
 
 	// nil means empty snapshot
 	root *PersistedNode
-
-	// Top-level branch split key cache to avoid random kvs reads during cold start
-	// Maps node index -> cached key bytes
-	keyCacheDepth int
-	keyCache      map[uint32][]byte
 }
 
 func NewEmptySnapshot(version uint32) *Snapshot {
@@ -177,15 +172,9 @@ func OpenSnapshot(snapshotDir string) (*Snapshot, error) {
 		}
 	}
 
-	// CRITICAL: Preload first, then build cache!
 	// Preload nodes + leaves into page cache using file I/O with SEQUENTIAL+WILLNEED
-	// Doing this via regular reads enables the kernel's large read-ahead path
+	// This eliminates random I/O during replay, relying on natural page cache for split keys
 	snapshot.prefetchNodesAndLeaves(snapshotDir)
-
-	// Build top-level key cache (preload split keys for upper tree levels)
-	// This is much faster now because nodes/leaves are already in page cache
-	cacheDepth := snapshot.determineOptimalCacheDepth()
-	snapshot.buildKeyCache(cacheDepth)
 
 	return snapshot, nil
 }
@@ -297,11 +286,7 @@ func (snapshot *Snapshot) KeyValue(offset uint64) ([]byte, []byte) {
 }
 
 func (snapshot *Snapshot) LeafKey(index uint32) []byte {
-	// Check cache first for top-level nodes
-	if cached, ok := snapshot.keyCache[index]; ok {
-		return cached
-	}
-	// Fall back to kvs mmap
+	// Read key directly from kvs mmap (will be page cached after first access)
 	leaf := snapshot.leavesLayout.Leaf(index)
 	offset := leaf.KeyOffset() + 4
 	return snapshot.kvs[offset : offset+uint64(leaf.KeyLength())]
@@ -604,25 +589,6 @@ func createFile(name string) (*os.File, error) {
 	return os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 }
 
-// determineOptimalCacheDepth calculates the optimal cache depth based on tree size
-// Larger trees benefit from deeper caches to reduce random disk I/O
-func (snapshot *Snapshot) determineOptimalCacheDepth() int {
-	totalNodes := snapshot.nodesLen()
-	totalSize := len(snapshot.nodes) + len(snapshot.leaves) + len(snapshot.kvs)
-	sizeMB := totalSize / (1024 * 1024)
-
-	// Auto-tune based on tree size:
-	// Small trees (<100MB): depth 14 (~16K keys, ~1MB cache)
-	// Medium trees (100-500MB): depth 16 (~65K keys, ~4MB cache)
-	// Large trees (>500MB): depth 18 (~256K keys, ~16MB cache)
-	if sizeMB > 500 || totalNodes > 1000000 {
-		return 18 // Large tree (e.g., EVM)
-	} else if sizeMB > 100 || totalNodes > 200000 {
-		return 16 // Medium tree (e.g., bank)
-	}
-	return 14 // Small tree
-}
-
 // prefetchNodesAndLeaves sequentially reads nodes and leaves files into page cache
 // This is critical for cold-start performance: eliminates 99% of random I/O during replay
 // Cost: ~61GB RAM for 3 large trees, ~15-20min on EBS
@@ -751,66 +717,4 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir string) {
 	avgSpeedMBps := float64(totalSize) / elapsed / (1024 * 1024)
 	fmt.Printf("[PREFETCH] Completed: %d MB loaded in %.1fs (%.1f MB/s)\n",
 		totalSize/(1024*1024), elapsed, avgSpeedMBps)
-}
-
-// buildKeyCache preloads branch split keys for the top levels of the tree to RAM
-// to avoid random kvs reads during cold start replay
-func (snapshot *Snapshot) buildKeyCache(maxDepth int) {
-	if snapshot.root == nil || snapshot.root.isLeaf {
-		return // Empty or single-leaf tree, no need to cache
-	}
-
-	fmt.Printf("[KEY CACHE] Building cache with depth=%d...\n", maxDepth)
-	snapshot.keyCacheDepth = maxDepth
-	snapshot.keyCache = make(map[uint32][]byte)
-
-	// Get actual tree depth from root node height (IAVL tree property)
-	maxTreeDepth := int(snapshot.root.Height())
-
-	// BFS traversal to collect top-level branch nodes
-	type queueItem struct {
-		node  PersistedNode
-		depth int
-	}
-	queue := []queueItem{{*snapshot.root, 0}}
-	var cacheSize int64
-
-	// Cache keys up to maxDepth
-	for len(queue) > 0 {
-		item := queue[0]
-		queue = queue[1:]
-
-		if item.depth >= maxDepth || item.node.isLeaf {
-			continue
-		}
-
-		// Cache the split key for this branch node
-		node := item.node.branchNode()
-		keyLeaf := node.KeyLeaf()
-		leaf := snapshot.leavesLayout.Leaf(keyLeaf)
-		offset := leaf.KeyOffset() + 4
-		length := leaf.KeyLength()
-		key := make([]byte, length)
-		copy(key, snapshot.kvs[offset:offset+uint64(length)])
-		snapshot.keyCache[keyLeaf] = key
-		cacheSize += int64(length)
-
-		// Enqueue children
-		left := item.node.Left()
-		if !left.IsLeaf() {
-			queue = append(queue, queueItem{left.(PersistedNode), item.depth + 1})
-		}
-		right := item.node.Right()
-		if !right.IsLeaf() {
-			queue = append(queue, queueItem{right.(PersistedNode), item.depth + 1})
-		}
-	}
-
-	// Report tree stats
-	totalNodes := snapshot.nodesLen()
-	totalLeaves := snapshot.leavesLen()
-	totalSize := len(snapshot.nodes) + len(snapshot.leaves) + len(snapshot.kvs)
-	fmt.Printf("[KEY CACHE] cache_depth=%d, cached %d keys (%.2f MB) | Tree: %d nodes, %d leaves, tree_height=%d, size=%.1f MB\n",
-		maxDepth, len(snapshot.keyCache), float64(cacheSize)/1024/1024,
-		totalNodes, totalLeaves, maxTreeDepth, float64(totalSize)/1024/1024)
 }
