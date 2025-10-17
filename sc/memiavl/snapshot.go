@@ -83,10 +83,6 @@ func OpenSnapshot(snapshotDir string) (*Snapshot, error) {
 	}
 	version := binary.LittleEndian.Uint32(bz[8:])
 
-	// Determine if we should enable madvise prefetching based on tree name and size
-	treeName := filepath.Base(snapshotDir)
-	shouldPrefetch := shouldEnableMadviseWillneed(snapshotDir, treeName)
-
 	var nodesMap, leavesMap, kvsMap *MmapFile
 	cleanupHandles := func(err error) error {
 		errs := []error{err}
@@ -102,19 +98,15 @@ func OpenSnapshot(snapshotDir string) (*Snapshot, error) {
 		return errors.Join(errs...)
 	}
 
-	// Use appropriate mmap function based on prefetch decision
-	mmapFunc := NewMmap
-	if !shouldPrefetch {
-		mmapFunc = NewMmapNoPreload
-	}
-
-	if nodesMap, err = mmapFunc(filepath.Join(snapshotDir, FileNameNodes)); err != nil {
+	// Always use NewMmap (SEQUENTIAL+WILLNEED) for all files
+	// This ensures consistent behavior and optimal performance for both cold and hot restarts
+	if nodesMap, err = NewMmap(filepath.Join(snapshotDir, FileNameNodes)); err != nil {
 		return nil, cleanupHandles(err)
 	}
-	if leavesMap, err = mmapFunc(filepath.Join(snapshotDir, FileNameLeaves)); err != nil {
+	if leavesMap, err = NewMmap(filepath.Join(snapshotDir, FileNameLeaves)); err != nil {
 		return nil, cleanupHandles(err)
 	}
-	if kvsMap, err = mmapFunc(filepath.Join(snapshotDir, FileNameKVs)); err != nil {
+	if kvsMap, err = NewMmap(filepath.Join(snapshotDir, FileNameKVs)); err != nil {
 		return nil, cleanupHandles(err)
 	}
 
@@ -184,7 +176,7 @@ func OpenSnapshot(snapshotDir string) (*Snapshot, error) {
 
 	// Preload nodes + leaves into page cache using file I/O with SEQUENTIAL+WILLNEED
 	// This eliminates random I/O during replay, relying on natural page cache for split keys
-	// Note: treeName was already determined above for madvise decision
+	treeName := filepath.Base(snapshotDir)
 	snapshot.prefetchNodesAndLeaves(snapshotDir, treeName)
 
 	return snapshot, nil
@@ -600,31 +592,6 @@ func createFile(name string) (*os.File, error) {
 	return os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 }
 
-// shouldEnableMadviseWillneed determines if madvise(WILLNEED) should be enabled
-// This is checked BEFORE opening the snapshot to avoid unnecessary OS prefetching
-func shouldEnableMadviseWillneed(snapshotDir, treeName string) bool {
-	// Check file sizes without opening them
-	nodesInfo, err1 := os.Stat(filepath.Join(snapshotDir, FileNameNodes))
-	leavesInfo, err2 := os.Stat(filepath.Join(snapshotDir, FileNameLeaves))
-
-	if err1 != nil || err2 != nil {
-		return false // If stat fails, don't prefetch
-	}
-
-	totalSizeMB := (nodesInfo.Size() + leavesInfo.Size()) / (1024 * 1024)
-
-	// Preload the 3 largest/most active trees: evm, bank, acc
-	// These contain most of the data and are heavily accessed during replay
-	// Parallel loading will maximize disk throughput
-	activeTrees := map[string]bool{
-		"evm":  true, // 44.7GB, most active, highest priority
-		"bank": true, // 12.1GB, high activity
-		"acc":  true, // 6.7GB, moderate activity
-	}
-
-	return activeTrees[treeName] && totalSizeMB >= 100
-}
-
 // shouldPreloadTree determines if a tree should be preloaded based on size and name
 // Only large/active trees benefit from preload; small trees add overhead
 func shouldPreloadTree(treeName string, sizeMB int) bool {
@@ -712,8 +679,8 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 				speedMBps := float64(tr) / elapsed / (1024 * 1024)
 				progressPct := float64(tr) * 100 / float64(totalSize)
 				remaining := float64(totalSize-int(tr)) / (speedMBps * 1024 * 1024)
-				fmt.Printf("[PREFETCH] Progress: %d/%d MB (%.1f%%), speed: %.1f MB/s, ETA: %.0fs\n",
-					tr/(1024*1024), totalSize/(1024*1024), progressPct, speedMBps, remaining)
+				fmt.Printf("[PREFETCH] Tree '%s': %d/%d MB (%.1f%%), speed: %.1f MB/s, ETA: %.0fs\n",
+					treeName, tr/(1024*1024), totalSize/(1024*1024), progressPct, speedMBps, remaining)
 			}
 		}
 	}()
