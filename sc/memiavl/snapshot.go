@@ -613,12 +613,13 @@ func shouldEnableMadviseWillneed(snapshotDir, treeName string) bool {
 
 	totalSizeMB := (nodesInfo.Size() + leavesInfo.Size()) / (1024 * 1024)
 
-	// DISABLE ALL PRELOAD for extremely slow disks (< 150 MB/s)
-	// Your disk: 120 MB/s → 44.7GB preload takes 6+ minutes
-	// Strategy: Skip preload, rely on madvise(SEQUENTIAL+WILLNEED) + on-demand loading
-	// Trade-off: Faster startup, replay will load data as needed
+	// Preload the 3 largest/most active trees: evm, bank, acc
+	// These contain most of the data and are heavily accessed during replay
+	// Parallel loading will maximize disk throughput
 	activeTrees := map[string]bool{
-		// All disabled - no explicit preload
+		"evm":  true, // 44.7GB, most active, highest priority
+		"bank": true, // 12.1GB, high activity
+		"acc":  true, // 6.7GB, moderate activity
 	}
 
 	return activeTrees[treeName] && totalSizeMB >= 100
@@ -627,11 +628,12 @@ func shouldEnableMadviseWillneed(snapshotDir, treeName string) bool {
 // shouldPreloadTree determines if a tree should be preloaded based on size and name
 // Only large/active trees benefit from preload; small trees add overhead
 func shouldPreloadTree(treeName string, sizeMB int) bool {
-	// DISABLE ALL PRELOAD - let OS handle prefetching via madvise hints
-	// On slow disks (< 150 MB/s), explicit preload is too slow
-	// Rely on: madvise(SEQUENTIAL+WILLNEED) + on-demand page faults during replay
+	// Preload the 3 largest/most active trees
+	// Parallel loading + madvise hints will maximize throughput even on slow disks
 	activeTrees := map[string]bool{
-		// All disabled
+		"evm":  true, // 44.7GB, most active
+		"bank": true, // 12.1GB, high activity
+		"acc":  true, // 6.7GB, moderate activity
 	}
 
 	return activeTrees[treeName] && sizeMB >= 100 // At least 100MB
