@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/alitto/pond"
@@ -82,69 +81,24 @@ func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error)
 		return nil, err
 	}
 
-	// Parallel snapshot loading: load all trees concurrently to maximize disk throughput
-	// This is critical when multiple large trees need preloading (evm, bank, acc)
 	treeMap := make(map[string]*Tree, len(entries))
 	treeNames := make([]string, 0, len(entries))
-
-	// Collect all tree names first
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		treeNames = append(treeNames, e.Name())
-	}
-
-	fmt.Printf("[LOADING] Starting parallel load of %d trees...\n", len(treeNames))
-
-	// Parallel loading using goroutines with concurrency limit
-	// Limit concurrent tree loading to avoid overwhelming the disk with too many goroutines
-	// Each tree's preload uses 32 goroutines, so 4 trees = 128 total goroutines
-	maxConcurrentTrees := 4
-	if v := os.Getenv("SEIDB_LOAD_CONCURRENCY"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			maxConcurrentTrees = n
+		name := e.Name()
+		treeNames = append(treeNames, name)
+		fmt.Printf("[LOADING] Opening snapshot for tree: %s\n", name)
+		snapshot, err := OpenSnapshot(filepath.Join(dir, name))
+		if err != nil {
+			return nil, err
 		}
+		treeMap[name] = NewFromSnapshot(snapshot, zeroCopy, cacheSize)
 	}
-
-	type loadResult struct {
-		name     string
-		snapshot *Snapshot
-		err      error
-	}
-
-	results := make(chan loadResult, len(treeNames))
-	semaphore := make(chan struct{}, maxConcurrentTrees)
-
-	for _, name := range treeNames {
-		name := name // capture loop variable
-		go func() {
-			semaphore <- struct{}{}        // acquire
-			defer func() { <-semaphore }() // release
-
-			fmt.Printf("[LOADING] Opening snapshot for tree: %s\n", name)
-			treeStart := time.Now()
-			snapshot, err := OpenSnapshot(filepath.Join(dir, name))
-			elapsed := time.Since(treeStart).Seconds()
-			if err == nil {
-				fmt.Printf("[LOADING] Tree '%s' loaded in %.1fs\n", name, elapsed)
-			}
-			results <- loadResult{name: name, snapshot: snapshot, err: err}
-		}()
-	}
-
-	// Collect results
-	for i := 0; i < len(treeNames); i++ {
-		result := <-results
-		if result.err != nil {
-			return nil, result.err
-		}
-		treeMap[result.name] = NewFromSnapshot(result.snapshot, zeroCopy, cacheSize)
-	}
-	close(results)
 
 	loadElapsed := time.Since(loadStartTime).Seconds()
-	fmt.Printf("[LOADING] All %d trees loaded in %.1fs (parallel preload)\n", len(treeNames), loadElapsed)
+	fmt.Printf("[LOADING] All %d trees loaded in %.1fs\n", len(treeNames), loadElapsed)
 
 	slices.Sort(treeNames)
 
@@ -390,6 +344,11 @@ func (t *MultiTree) UpdateCommitInfo() {
 
 // Catchup replay the new entries in the Rlog file on the tree to catch up to the target or latest version.
 func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersion int64) error {
+	return t.CatchupWithStartTime(stream, endVersion, time.Time{})
+}
+
+// CatchupWithStartTime is like Catchup but also tracks total time from process start
+func (t *MultiTree) CatchupWithStartTime(stream types.Stream[proto.ChangelogEntry], endVersion int64, processStartTime time.Time) error {
 	lastIndex, err := stream.LastOffset()
 	if err != nil {
 		return fmt.Errorf("read rlog last index failed, %w", err)
@@ -460,10 +419,6 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 		if replayCount%1000 == 0 {
 			fmt.Printf("[PRODUCER] Replayed %d changelog entries (dispatched to all trees)\n", replayCount)
 		}
-		// Extra diagnostic: print every 100 entries after 8000 to diagnose slowdown
-		if replayCount > 8000 && replayCount%100 == 0 {
-			fmt.Printf("[PRODUCER] Progress: %d entries (checking for slowdown...)\n", replayCount)
-		}
 		return nil
 	})
 
@@ -482,8 +437,14 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 
 	// Print final summary with timing
 	replayElapsed := time.Since(replayStartTime).Seconds()
-	fmt.Printf("[REPLAY] Total: %d entries in %.1fs (%.1f entries/sec, wait=%.1fs)\n",
-		replayCount, replayElapsed, float64(replayCount)/replayElapsed, waitElapsed)
+	if !processStartTime.IsZero() {
+		totalElapsed := time.Since(processStartTime).Seconds()
+		fmt.Printf("[REPLAY] Total: %d entries in %.1fs (%.1f entries/sec, wait=%.1fs) | Total from process start: %.1fs\n",
+			replayCount, replayElapsed, float64(replayCount)/replayElapsed, waitElapsed, totalElapsed)
+	} else {
+		fmt.Printf("[REPLAY] Total: %d entries in %.1fs (%.1f entries/sec, wait=%.1fs)\n",
+			replayCount, replayElapsed, float64(replayCount)/replayElapsed, waitElapsed)
+	}
 
 	t.UpdateCommitInfo()
 	return nil

@@ -157,7 +157,7 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 
 	if targetVersion == 0 || targetVersion > mtree.Version() {
 		logger.Info("Start catching up and replaying the MemIAVL changelog file")
-		if err := mtree.Catchup(streamHandler, targetVersion); err != nil {
+		if err := mtree.CatchupWithStartTime(streamHandler, targetVersion, totalStartTime); err != nil {
 			return nil, errorutils.Join(err, streamHandler.Close())
 		}
 		logger.Info(fmt.Sprintf("Finished the replay and caught up to version %d", targetVersion))
