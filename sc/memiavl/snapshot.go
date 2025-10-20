@@ -638,10 +638,12 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 	// If most pages are already resident, skip prefetch
 	residentNodes, errNodes := residentRatio(snapshot.nodes)
 	residentLeaves, errLeaves := residentRatio(snapshot.leaves)
+	threshold := 0.85
+	fmt.Printf("[PREFETCH] Tree %s nodes page cache residency ratio is (%.0f%%)\n", treeName, residentNodes)
+	fmt.Printf("[PREFETCH] Tree %s leaves page cache residency ratio is (%.0f%%)\n", treeName, residentLeaves)
 	if errNodes == nil && errLeaves == nil {
-		avgResident := (residentNodes + residentLeaves) / 2.0
-		fmt.Printf("[PREFETCH] Tree '%s' page cache residency ratio is (%.0f%%)\n", treeName, avgResident*100)
-		if avgResident >= 0.85 {
+		if residentNodes >= threshold && residentLeaves >= threshold {
+			fmt.Printf("[PREFETCH] Skipped prefetching for tree %s\n", treeName)
 			return
 		}
 	}
@@ -697,9 +699,14 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 		}
 		return nil
 	}
+	if residentNodes < threshold {
+		_ = streamFileSequential(filepath.Join(snapshotDir, FileNameNodes))
+	}
 
-	_ = streamFileSequential(filepath.Join(snapshotDir, FileNameNodes))
-	_ = streamFileSequential(filepath.Join(snapshotDir, FileNameLeaves))
+	if residentLeaves < threshold {
+		_ = streamFileSequential(filepath.Join(snapshotDir, FileNameLeaves))
+	}
+
 	close(reportDone)
 
 	elapsed := time.Since(startTime).Seconds()
