@@ -615,8 +615,7 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 
 	nodesSize := len(snapshot.nodes)
 	leavesSize := len(snapshot.leaves)
-	kvSize := len(snapshot.kvs)
-	totalSize := nodesSize + leavesSize + kvSize
+	totalSize := nodesSize + leavesSize
 
 	if totalSize == 0 {
 		return
@@ -633,8 +632,19 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 	}
 
 	startTime := time.Now()
-	fmt.Printf("[PREFETCH] Starting tree '%s': %d MB (nodes %d + leaves %d + kvs %d)\n",
-		treeName, totalSizeMB, nodesSize/(1024*1024), leavesSize/(1024*1024), kvSize/(1024*1024))
+	fmt.Printf("[PREFETCH] Starting tree '%s': %d MB (nodes %d + leaves %d)\n",
+		treeName, totalSizeMB, nodesSize/(1024*1024), leavesSize/(1024*1024))
+
+	// If most pages are already resident, skip prefetch
+	residentNodes, errNodes := residentRatio(snapshot.nodes)
+	residentLeaves, errLeaves := residentRatio(snapshot.leaves)
+	if errNodes == nil && errLeaves == nil {
+		avgResident := (residentNodes + residentLeaves) / 2.0
+		fmt.Printf("[PREFETCH] Tree '%s' page cache residency ratio is (%.0f%%)\n", treeName, avgResident*100)
+		if avgResident >= 0.9 {
+			return
+		}
+	}
 
 	var totalRead int64
 	reportDone := make(chan struct{})
@@ -690,7 +700,6 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 
 	_ = streamFileSequential(filepath.Join(snapshotDir, FileNameNodes))
 	_ = streamFileSequential(filepath.Join(snapshotDir, FileNameLeaves))
-	_ = streamFileSequential(filepath.Join(snapshotDir, FileNameKVs))
 	close(reportDone)
 
 	elapsed := time.Since(startTime).Seconds()
