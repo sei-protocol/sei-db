@@ -149,11 +149,6 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 		return nil, err
 	}
 
-	// Best-effort warmup of changelog WAL segments to reduce random I/O during replay
-	if !opts.ReadOnly {
-		_ = prefetchChangelogSegments(utils.GetChangelogPath(opts.Dir))
-	}
-
 	if targetVersion == 0 || targetVersion > mtree.Version() {
 		logger.Info("Start catching up and replaying the MemIAVL changelog file")
 		if err := mtree.CatchupWithStartTime(streamHandler, targetVersion, restartTime); err != nil {
