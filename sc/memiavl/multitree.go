@@ -408,7 +408,7 @@ func (t *MultiTree) CatchupWithStartTime(stream types.Stream[proto.ChangelogEntr
 	}
 
 	for _, tree := range t.trees {
-		fmt.Printf("[Replay] Tree %s took %d to replay changelog\n", tree.Name, perTreeReplayLatency[tree.Name])
+		fmt.Printf("[Replay] Tree %s took %dms to replay changelog\n", tree.Name, perTreeReplayLatency[tree.Name]/1000000)
 	}
 
 	// Print final summary with timing
