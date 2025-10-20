@@ -152,13 +152,6 @@ func (t *Tree) startBackgroundWrite(bufferSize int, treeName string) {
 			if totalPairs > 0 {
 				processedCount++
 			}
-
-			// Print consumer progress for monitoring (only for trees with high volume)
-			if processedCount > 0 && processedCount%10000 == 0 {
-				if treeName != "" {
-					fmt.Printf("Tree %s processed %d changesets \n", treeName, processedCount)
-				}
-			}
 		}
 
 		if treeName != "" {

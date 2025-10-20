@@ -334,6 +334,7 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 // CatchupWithStartTime is like Catchup but also tracks total time from process start
 func (t *MultiTree) CatchupWithStartTime(stream types.Stream[proto.ChangelogEntry], endVersion int64, processStartTime time.Time) error {
 	replayStartTime := time.Now()
+	var perTreeReplayLatency = make(map[string]int64)
 	lastIndex, err := stream.LastOffset()
 	if err != nil {
 		return fmt.Errorf("read rlog last index failed, %w", err)
@@ -363,7 +364,7 @@ func (t *MultiTree) CatchupWithStartTime(stream types.Stream[proto.ChangelogEntr
 	// This allows publisher to complete quickly without blocking on slow trees
 	fmt.Printf("[REPLAY INIT] Starting background workers for %d existing trees\n", len(t.trees))
 	for _, namedTree := range t.trees {
-		namedTree.Tree.startBackgroundWriteLargeBuffer(1000, namedTree.Name)
+		namedTree.Tree.startBackgroundWriteLargeBuffer(100, namedTree.Name)
 	}
 
 	var replayCount = 0
@@ -373,9 +374,11 @@ func (t *MultiTree) CatchupWithStartTime(stream types.Stream[proto.ChangelogEntr
 		}
 		updatedTrees := make(map[string]bool)
 		for _, cs := range entry.Changesets {
+			startTime := time.Now()
 			treeName := cs.Name
 			t.TreeByName(treeName).ApplyChangeSetAsync(cs.Changeset)
 			updatedTrees[treeName] = true
+			perTreeReplayLatency[treeName] += time.Since(startTime).Nanoseconds()
 		}
 		// For trees without changes, still need to bump version
 		for _, tree := range t.trees {
@@ -396,10 +399,16 @@ func (t *MultiTree) CatchupWithStartTime(stream types.Stream[proto.ChangelogEntr
 	fmt.Printf("Waiting for all trees to complete processing...\n")
 
 	for _, tree := range t.trees {
+		startTime := time.Now()
 		tree.WaitToCompleteAsyncWrite()
+		perTreeReplayLatency[tree.Name] += time.Since(startTime).Nanoseconds()
 	}
 	if err != nil {
 		return err
+	}
+
+	for _, tree := range t.trees {
+		fmt.Printf("[Replay] Tree %s took %d to replay changelog\n", tree.Name, perTreeReplayLatency[tree.Name])
 	}
 
 	// Print final summary with timing
