@@ -624,7 +624,7 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 	// If most pages are already resident, skip prefetch
 	residentNodes, errNodes := residentRatio(snapshot.nodes)
 	residentLeaves, errLeaves := residentRatio(snapshot.leaves)
-	threshold := 0.85
+	threshold := 0.8
 	fmt.Printf("[PREFETCH] Tree %s nodes page cache residency ratio is %f\n", treeName, residentNodes)
 	fmt.Printf("[PREFETCH] Tree %s leaves page cache residency ratio is %f\n", treeName, residentLeaves)
 	if errNodes == nil && errLeaves == nil {
@@ -633,10 +633,10 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 			return
 		}
 	}
-	fmt.Printf("[PREFETCH] Starting to prefetch tree: %s\n", treeName)
 
 	// Helper: sequentially read file into page cache using a large buffer
 	streamFileSequential := func(path string) error {
+		fmt.Printf("[PREFETCH] Starting to prefetch tree %s with file: %s\n", treeName, path)
 		f, err := os.Open(path)
 		if err != nil {
 			return err

@@ -1,7 +1,6 @@
 package memiavl
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/ledgerwatch/erigon-lib/mmap"
@@ -47,7 +46,6 @@ func newMmapInternal(path string, withPrefetch bool) (*MmapFile, error) {
 			// Override default MADV_RANDOM with SEQUENTIAL + WILLNEED to favor prefetching
 			_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
 			_ = unix.Madvise(data, unix.MADV_WILLNEED)
-			fmt.Printf("[MMAP] madvise SEQUENTIAL+WILLNEED applied path=%s size=%d MB\n", path, len(data)/(1024*1024))
 		}
 	}
 
