@@ -592,7 +592,7 @@ func createFile(name string) (*os.File, error) {
 
 // shouldPreloadTree determines if a tree should be preloaded based on size and name
 // Only large/active trees benefit from preload; small trees add overhead
-func shouldPreloadTree(treeName string, sizeMB int) bool {
+func shouldPreloadTree(treeName string) bool {
 	// Preload the 3 largest/most active trees
 	// Parallel loading + madvise hints will maximize throughput even on slow disks
 	activeTrees := map[string]bool{
@@ -601,7 +601,7 @@ func shouldPreloadTree(treeName string, sizeMB int) bool {
 		"acc":  true,
 	}
 
-	return activeTrees[treeName] && sizeMB >= 100 // At least 100MB
+	return activeTrees[treeName] // At least 100MB
 }
 
 // prefetchNodesAndLeaves sequentially reads nodes and leaves files into page cache
@@ -613,27 +613,13 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 		return // Empty snapshot
 	}
 
-	nodesSize := len(snapshot.nodes)
-	leavesSize := len(snapshot.leaves)
-	totalSize := nodesSize + leavesSize
-
-	if totalSize == 0 {
-		return
-	}
-
-	totalSizeMB := totalSize / (1024 * 1024)
-
 	// Selective preload: only preload large and active trees
 	// Small/inactive trees have minimal I/O during replay, not worth preloading
-	needsPreload := shouldPreloadTree(treeName, totalSizeMB)
-
+	needsPreload := shouldPreloadTree(treeName)
 	if !needsPreload {
 		return
 	}
-
 	startTime := time.Now()
-	fmt.Printf("[PREFETCH] Starting tree '%s': %d MB (nodes %d + leaves %d)\n",
-		treeName, totalSizeMB, nodesSize/(1024*1024), leavesSize/(1024*1024))
 
 	// If most pages are already resident, skip prefetch
 	residentNodes, errNodes := residentRatio(snapshot.nodes)
@@ -647,32 +633,7 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 			return
 		}
 	}
-
-	var totalRead int64
-	reportDone := make(chan struct{})
-
-	// Progress reporter
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-reportDone:
-				return
-			case <-ticker.C:
-				tr := atomic.LoadInt64(&totalRead)
-				elapsed := time.Since(startTime).Seconds()
-				if elapsed <= 0 {
-					continue
-				}
-				speedMBps := float64(tr) / elapsed / (1024 * 1024)
-				progressPct := float64(tr) * 100 / float64(totalSize)
-				remaining := float64(totalSize-int(tr)) / (speedMBps * 1024 * 1024)
-				fmt.Printf("[PREFETCH] Tree '%s': %d/%d MB (%.1f%%), speed: %.1f MB/s, ETA: %.0fs\n",
-					treeName, tr/(1024*1024), totalSize/(1024*1024), progressPct, speedMBps, remaining)
-			}
-		}
-	}()
+	fmt.Printf("[PREFETCH] Starting to prefetch tree: %s\n", treeName)
 
 	// Helper: sequentially read file into page cache using a large buffer
 	streamFileSequential := func(path string) error {
@@ -680,7 +641,41 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		fileInfo, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		reportDone := make(chan struct{})
+		var totalRead int64
+		totalSize := fileInfo.Size()
+		defer func() {
+			f.Close()
+			close(reportDone)
+		}()
+
+		// Progress reporter
+		go func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-reportDone:
+					return
+				case <-ticker.C:
+					tr := atomic.LoadInt64(&totalRead)
+					elapsed := time.Since(startTime).Seconds()
+					if elapsed <= 0 {
+						continue
+					}
+					speedMBps := float64(tr) / elapsed / (1024 * 1024)
+					progressPct := float64(tr) * 100 / float64(totalSize)
+					remaining := float64(totalSize-tr) / (speedMBps * 1024 * 1024)
+					fmt.Printf("[PREFETCH] Tree '%s': %d/%d MB (%.1f%%), speed: %.1f MB/s, ETA: %.0fs\n",
+						treeName, tr/(1024*1024), totalSize/(1024*1024), progressPct, speedMBps, remaining)
+				}
+			}
+		}()
 
 		const bufSize = 16 * 1024 * 1024 // 16MB
 		buf := make([]byte, bufSize)
@@ -697,6 +692,10 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 				break
 			}
 		}
+		elapsed := time.Since(startTime).Seconds()
+		avgSpeedMBps := float64(totalSize) / elapsed / (1024 * 1024)
+		fmt.Printf("[PREFETCH] Completed prefetching %s: %d MB in %.1fs (%.1f MB/s)\n",
+			path, totalSize/(1024*1024), elapsed, avgSpeedMBps)
 		return nil
 	}
 	if residentNodes < threshold {
@@ -707,10 +706,4 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 		_ = streamFileSequential(filepath.Join(snapshotDir, FileNameLeaves))
 	}
 
-	close(reportDone)
-
-	elapsed := time.Since(startTime).Seconds()
-	avgSpeedMBps := float64(totalSize) / elapsed / (1024 * 1024)
-	fmt.Printf("[PREFETCH] Completed tree '%s': %d MB in %.1fs (%.1f MB/s)\n",
-		treeName, totalSize/(1024*1024), elapsed, avgSpeedMBps)
 }
