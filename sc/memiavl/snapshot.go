@@ -641,7 +641,7 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 	if errNodes == nil && errLeaves == nil {
 		avgResident := (residentNodes + residentLeaves) / 2.0
 		fmt.Printf("[PREFETCH] Tree '%s' page cache residency ratio is (%.0f%%)\n", treeName, avgResident*100)
-		if avgResident >= 0.9 {
+		if avgResident >= 0.85 {
 			return
 		}
 	}
