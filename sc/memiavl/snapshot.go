@@ -597,8 +597,8 @@ func shouldPreloadTree(treeName string) bool {
 	// Parallel loading + madvise hints will maximize throughput even on slow disks
 	activeTrees := map[string]bool{
 		"evm":  true,
-		"bank": true,
-		"acc":  true,
+		"bank": false,
+		"acc":  false,
 	}
 
 	return activeTrees[treeName] // At least 100MB
@@ -623,11 +623,13 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 	// If most pages are already resident, skip prefetch
 	residentNodes, errNodes := residentRatio(snapshot.nodes)
 	residentLeaves, errLeaves := residentRatio(snapshot.leaves)
+	residentKvs, errKv := residentRatio(snapshot.kvs)
 	threshold := 0.8
 	fmt.Printf("[PREFETCH] Tree %s nodes page cache residency ratio is %f\n", treeName, residentNodes)
 	fmt.Printf("[PREFETCH] Tree %s leaves page cache residency ratio is %f\n", treeName, residentLeaves)
-	if errNodes == nil && errLeaves == nil {
-		if residentNodes >= threshold && residentLeaves >= threshold {
+	fmt.Printf("[PREFETCH] Tree %s kvs page cache residency ratio is %f\n", treeName, residentKvs)
+	if errNodes == nil && errLeaves == nil && errKv == nil {
+		if residentNodes >= threshold && residentLeaves >= threshold && residentKvs > threshold {
 			fmt.Printf("[PREFETCH] Skipped prefetching for tree %s\n", treeName)
 			return
 		}
@@ -639,6 +641,10 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 
 	if residentLeaves < threshold {
 		_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameLeaves))
+	}
+
+	if residentKvs < threshold {
+		_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameKVs))
 	}
 
 }
