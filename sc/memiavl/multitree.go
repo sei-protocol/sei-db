@@ -89,7 +89,7 @@ func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error)
 		}
 		name := e.Name()
 		treeNames = append(treeNames, name)
-		fmt.Printf("[LOADING] Opening snapshot for tree and starts prefetching: %s\n", name)
+		fmt.Printf("[LOADING] Opening snapshot for tree: %s\n", name)
 		snapshot, err := OpenSnapshot(filepath.Join(dir, name))
 		if err != nil {
 			return nil, err
@@ -333,6 +333,7 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 
 // CatchupWithStartTime is like Catchup but also tracks total time from process start
 func (t *MultiTree) CatchupWithStartTime(stream types.Stream[proto.ChangelogEntry], endVersion int64, processStartTime time.Time) error {
+	replayStartTime := time.Now()
 	lastIndex, err := stream.LastOffset()
 	if err != nil {
 		return fmt.Errorf("read rlog last index failed, %w", err)
@@ -364,9 +365,7 @@ func (t *MultiTree) CatchupWithStartTime(stream types.Stream[proto.ChangelogEntr
 	for _, namedTree := range t.trees {
 		namedTree.Tree.startBackgroundWriteLargeBuffer(1000, namedTree.Name)
 	}
-	fmt.Printf("[REPLAY INIT] Background workers started, estimated buffer memory: ~60GB for large trees when created\n")
 
-	replayStartTime := time.Now()
 	var replayCount = 0
 	err = stream.Replay(firstIndex, endIndex, func(index uint64, entry proto.ChangelogEntry) error {
 		if err := t.ApplyUpgrades(entry.Upgrades); err != nil {
@@ -395,13 +394,10 @@ func (t *MultiTree) CatchupWithStartTime(stream types.Stream[proto.ChangelogEntr
 
 	// Wait for all async writes to complete
 	fmt.Printf("Waiting for all trees to complete processing...\n")
-	waitStartTime := time.Now()
+
 	for _, tree := range t.trees {
 		tree.WaitToCompleteAsyncWrite()
 	}
-	waitElapsed := time.Since(waitStartTime).Seconds()
-	fmt.Printf("[REPLAY] All consumers completed in %.1fs\n", waitElapsed)
-
 	if err != nil {
 		return err
 	}
@@ -409,12 +405,12 @@ func (t *MultiTree) CatchupWithStartTime(stream types.Stream[proto.ChangelogEntr
 	// Print final summary with timing
 	replayElapsed := time.Since(replayStartTime).Seconds()
 	if !processStartTime.IsZero() {
-		totalElapsed := time.Since(processStartTime).Seconds()
-		fmt.Printf("[REPLAY] Total: %d entries in %.1fs (%.1f entries/sec, wait=%.1fs) | Total from process start: %.1fs\n",
-			replayCount, replayElapsed, float64(replayCount)/replayElapsed, waitElapsed, totalElapsed)
+		prefetchLoadingTime := time.Since(processStartTime).Seconds()
+		fmt.Printf("[REPLAY] Total replay %d entries in %.1fs (%.1f entries/sec) | Total prefetch loading time: %.1fs\n",
+			replayCount, replayElapsed, float64(replayCount)/replayElapsed, prefetchLoadingTime)
 	} else {
-		fmt.Printf("[REPLAY] Total: %d entries in %.1fs (%.1f entries/sec, wait=%.1fs)\n",
-			replayCount, replayElapsed, float64(replayCount)/replayElapsed, waitElapsed)
+		fmt.Printf("[REPLAY] Total replay %d entries in %.1fs (%.1f entries/sec)\n",
+			replayCount, replayElapsed, float64(replayCount)/replayElapsed)
 	}
 
 	t.UpdateCommitInfo()

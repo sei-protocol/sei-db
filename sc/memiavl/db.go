@@ -86,7 +86,7 @@ const (
 )
 
 func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error) {
-	totalStartTime := time.Now()
+	restartTime := time.Now()
 
 	var (
 		err      error
@@ -157,14 +157,14 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 
 	if targetVersion == 0 || targetVersion > mtree.Version() {
 		logger.Info("Start catching up and replaying the MemIAVL changelog file")
-		if err := mtree.CatchupWithStartTime(streamHandler, targetVersion, totalStartTime); err != nil {
+		if err := mtree.CatchupWithStartTime(streamHandler, targetVersion, restartTime); err != nil {
 			return nil, errorutils.Join(err, streamHandler.Close())
 		}
 		logger.Info(fmt.Sprintf("Finished the replay and caught up to version %d", targetVersion))
 	}
 
 	// Print total startup time
-	totalElapsed := time.Since(totalStartTime).Seconds()
+	totalElapsed := time.Since(restartTime).Seconds()
 	fmt.Printf("[STARTUP] Total time: %.1fs (load + replay)\n", totalElapsed)
 
 	if opts.LoadForOverwriting && targetVersion > 0 {
