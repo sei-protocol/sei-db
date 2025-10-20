@@ -637,9 +637,9 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 		_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameNodes))
 	}
 
-	//if residentLeaves < threshold {
-	//	_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameLeaves))
-	//}
+	if residentLeaves < threshold {
+		_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameLeaves))
+	}
 
 }
 
