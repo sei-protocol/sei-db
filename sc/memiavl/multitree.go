@@ -414,9 +414,9 @@ func (t *MultiTree) CatchupWithStartTime(stream types.Stream[proto.ChangelogEntr
 	// Print final summary with timing
 	replayElapsed := time.Since(replayStartTime).Seconds()
 	if !processStartTime.IsZero() {
-		prefetchLoadingTime := time.Since(processStartTime).Seconds()
-		fmt.Printf("[REPLAY] Total replay %d entries in %.1fs (%.1f entries/sec) | Total prefetch loading time: %.1fs\n",
-			replayCount, replayElapsed, float64(replayCount)/replayElapsed, prefetchLoadingTime)
+		totalCatchupTime := time.Since(processStartTime).Seconds()
+		fmt.Printf("[REPLAY] Total replay %d entries in %.1fs (%.1f entries/sec) | Total catchup process time: %.1fs\n",
+			replayCount, replayElapsed, float64(replayCount)/replayElapsed, totalCatchupTime)
 	} else {
 		fmt.Printf("[REPLAY] Total replay %d entries in %.1fs (%.1f entries/sec)\n",
 			replayCount, replayElapsed, float64(replayCount)/replayElapsed)
