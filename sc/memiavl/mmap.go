@@ -48,10 +48,6 @@ func newMmapInternal(path string, withPrefetch bool) (*MmapFile, error) {
 			_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
 			_ = unix.Madvise(data, unix.MADV_WILLNEED)
 			fmt.Printf("[MMAP] madvise SEQUENTIAL+WILLNEED applied path=%s size=%d MB\n", path, len(data)/(1024*1024))
-		} else {
-			// Keep default MADV_RANDOM, no prefetching
-			_ = unix.Madvise(data, unix.MADV_RANDOM)
-			fmt.Printf("[MMAP] madvise RANDOM (no prefetch) path=%s size=%d MB\n", path, len(data)/(1024*1024))
 		}
 	}
 

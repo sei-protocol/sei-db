@@ -8,8 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -598,9 +596,9 @@ func shouldPreloadTree(treeName string, sizeMB int) bool {
 	// Preload the 3 largest/most active trees
 	// Parallel loading + madvise hints will maximize throughput even on slow disks
 	activeTrees := map[string]bool{
-		"evm":  true, // 44.7GB, most active
-		"bank": true, // 12.1GB, high activity
-		"acc":  true, // 6.7GB, moderate activity
+		"evm":  true,
+		"bank": true,
+		"acc":  true,
 	}
 
 	return activeTrees[treeName] && sizeMB >= 100 // At least 100MB
@@ -630,7 +628,6 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 	needsPreload := shouldPreloadTree(treeName, totalSizeMB)
 
 	if !needsPreload {
-		fmt.Printf("[PREFETCH] Skipped tree '%s': too small/inactive (%d MB, threshold 100 MB)\n", treeName, totalSizeMB)
 		return
 	}
 
@@ -638,33 +635,12 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 	fmt.Printf("[PREFETCH] Starting tree '%s': %d MB (nodes %d + leaves %d)\n",
 		treeName, totalSizeMB, nodesSize/(1024*1024), leavesSize/(1024*1024))
 
-	// Parallel direct file read with configurable concurrency and chunk size
-	// Defaults chosen to saturate gp3@1000 MiB/s on r7i.4xlarge
-	concurrency := 32
-	if v := os.Getenv("SEIDB_PREFETCH_CONCURRENCY"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			concurrency = n
-		}
-	}
-	chunkMB := 8
-	if v := os.Getenv("SEIDB_PREFETCH_CHUNK_MB"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			chunkMB = n
-		}
-	}
-	chunkSize := chunkMB * 1024 * 1024
-	if chunkSize < 1024*1024 {
-		chunkSize = 1024 * 1024
-	}
-	fmt.Printf("[PREFETCH v6-parallel] concurrency=%d chunk=%d MB\n", concurrency, chunkMB)
-
 	var totalRead int64
-	var wg sync.WaitGroup
 	reportDone := make(chan struct{})
 
 	// Progress reporter
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -685,63 +661,34 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 		}
 	}()
 
-	// Helper: parallel ReadAt across the file to fill page cache
-	streamFileParallel := func(path string, fileSize int) error {
+	// Helper: sequentially read file into page cache using a large buffer
+	streamFileSequential := func(path string) error {
 		f, err := os.Open(path)
 		if err != nil {
 			return err
 		}
 		defer f.Close()
 
-		jobs := make(chan [2]int64, concurrency)
-		wg.Add(concurrency)
-		for w := 0; w < concurrency; w++ {
-			go func() {
-				defer wg.Done()
-				buf := make([]byte, chunkSize)
-				for job := range jobs {
-					off := job[0]
-					n := int(job[1])
-					// ReadAt tries to read full len(buf); loop to fill n bytes
-					remaining := n
-					pos := off
-					for remaining > 0 {
-						readN, er := f.ReadAt(buf[:remaining], pos)
-						if readN > 0 {
-							pos += int64(readN)
-							remaining -= readN
-							atomic.AddInt64(&totalRead, int64(readN))
-						}
-						if er == io.EOF {
-							break
-						}
-						if er != nil && er != io.ErrUnexpectedEOF {
-							// Best-effort warming; ignore transient errors
-							break
-						}
-						if readN == 0 {
-							break
-						}
-					}
-				}
-			}()
-		}
-
-		// Enqueue chunks sequentially to retain locality
-		for off := 0; off < fileSize; off += chunkSize {
-			end := off + chunkSize
-			if end > fileSize {
-				end = fileSize
+		const bufSize = 16 * 1024 * 1024 // 16MB
+		buf := make([]byte, bufSize)
+		for {
+			readN, er := f.Read(buf)
+			if readN > 0 {
+				atomic.AddInt64(&totalRead, int64(readN))
 			}
-			jobs <- [2]int64{int64(off), int64(end - off)}
+			if er == io.EOF {
+				break
+			}
+			if er != nil {
+				// Best-effort warming; ignore transient errors
+				break
+			}
 		}
-		close(jobs)
-		wg.Wait()
 		return nil
 	}
 
-	_ = streamFileParallel(filepath.Join(snapshotDir, FileNameNodes), nodesSize)
-	_ = streamFileParallel(filepath.Join(snapshotDir, FileNameLeaves), leavesSize)
+	_ = streamFileSequential(filepath.Join(snapshotDir, FileNameNodes))
+	_ = streamFileSequential(filepath.Join(snapshotDir, FileNameLeaves))
 	close(reportDone)
 
 	elapsed := time.Since(startTime).Seconds()
