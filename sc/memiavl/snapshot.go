@@ -619,7 +619,6 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 	if !needsPreload {
 		return
 	}
-	startTime := time.Now()
 
 	// If most pages are already resident, skip prefetch
 	residentNodes, errNodes := residentRatio(snapshot.nodes)
@@ -634,76 +633,78 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 		}
 	}
 
-	// Helper: sequentially read file into page cache using a large buffer
-	streamFileSequential := func(path string) error {
-		fmt.Printf("[PREFETCH] Starting to prefetch tree %s with file: %s\n", treeName, path)
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		fileInfo, err := f.Stat()
-		if err != nil {
-			return err
-		}
-		reportDone := make(chan struct{})
-		var totalRead int64
-		totalSize := fileInfo.Size()
-		defer func() {
-			f.Close()
-			close(reportDone)
-		}()
-
-		// Progress reporter
-		go func() {
-			ticker := time.NewTicker(10 * time.Second)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-reportDone:
-					return
-				case <-ticker.C:
-					tr := atomic.LoadInt64(&totalRead)
-					elapsed := time.Since(startTime).Seconds()
-					if elapsed <= 0 {
-						continue
-					}
-					speedMBps := float64(tr) / elapsed / (1024 * 1024)
-					progressPct := float64(tr) * 100 / float64(totalSize)
-					remaining := float64(totalSize-tr) / (speedMBps * 1024 * 1024)
-					fmt.Printf("[PREFETCH] Tree '%s': %d/%d MB (%.1f%%), speed: %.1f MB/s, ETA: %.0fs\n",
-						treeName, tr/(1024*1024), totalSize/(1024*1024), progressPct, speedMBps, remaining)
-				}
-			}
-		}()
-
-		const bufSize = 16 * 1024 * 1024 // 16MB
-		buf := make([]byte, bufSize)
-		for {
-			readN, er := f.Read(buf)
-			if readN > 0 {
-				atomic.AddInt64(&totalRead, int64(readN))
-			}
-			if er == io.EOF {
-				break
-			}
-			if er != nil {
-				// Best-effort warming; ignore transient errors
-				break
-			}
-		}
-		elapsed := time.Since(startTime).Seconds()
-		avgSpeedMBps := float64(totalSize) / elapsed / (1024 * 1024)
-		fmt.Printf("[PREFETCH] Completed prefetching %s: %d MB in %.1fs (%.1f MB/s)\n",
-			path, totalSize/(1024*1024), elapsed, avgSpeedMBps)
-		return nil
-	}
 	if residentNodes < threshold {
-		_ = streamFileSequential(filepath.Join(snapshotDir, FileNameNodes))
+		_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameNodes))
 	}
 
 	if residentLeaves < threshold {
-		_ = streamFileSequential(filepath.Join(snapshotDir, FileNameLeaves))
+		_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameLeaves))
 	}
 
+}
+
+// SequentialReadAndFillPageCache sequentially read file into page cache using a large buffer
+func SequentialReadAndFillPageCache(path string) error {
+	startTime := time.Now()
+	fmt.Printf("[PREFETCH] Starting to prefetch file: %s\n", path)
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	fileInfo, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	reportDone := make(chan struct{})
+	var totalRead int64
+	totalSize := fileInfo.Size()
+	defer func() {
+		f.Close()
+		close(reportDone)
+	}()
+
+	// Progress reporter
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-reportDone:
+				return
+			case <-ticker.C:
+				tr := atomic.LoadInt64(&totalRead)
+				elapsed := time.Since(startTime).Seconds()
+				if elapsed <= 0 {
+					continue
+				}
+				speedMBps := float64(tr) / elapsed / (1024 * 1024)
+				progressPct := float64(tr) * 100 / float64(totalSize)
+				remaining := float64(totalSize-tr) / (speedMBps * 1024 * 1024)
+				fmt.Printf("[PREFETCH] File '%s': %d/%d MB (%.1f%%), speed: %.1f MB/s, ETA: %.0fs\n",
+					path, tr/(1024*1024), totalSize/(1024*1024), progressPct, speedMBps, remaining)
+			}
+		}
+	}()
+
+	const bufSize = 16 * 1024 * 1024 // 16MB
+	buf := make([]byte, bufSize)
+	for {
+		readN, er := f.Read(buf)
+		if readN > 0 {
+			atomic.AddInt64(&totalRead, int64(readN))
+		}
+		if er == io.EOF {
+			break
+		}
+		if er != nil {
+			// Best-effort warming; ignore transient errors
+			break
+		}
+	}
+	elapsed := time.Since(startTime).Seconds()
+	avgSpeedMBps := float64(totalSize) / elapsed / (1024 * 1024)
+	fmt.Printf("[PREFETCH] Completed prefetching %s: %d MB in %.1fs (%.1f MB/s)\n",
+		path, totalSize/(1024*1024), elapsed, avgSpeedMBps)
+	return nil
 }
