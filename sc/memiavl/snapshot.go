@@ -639,8 +639,8 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 	residentNodes, errNodes := residentRatio(snapshot.nodes)
 	residentLeaves, errLeaves := residentRatio(snapshot.leaves)
 	threshold := 0.85
-	fmt.Printf("[PREFETCH] Tree %s nodes page cache residency ratio is (%.0f%%)\n", treeName, residentNodes)
-	fmt.Printf("[PREFETCH] Tree %s leaves page cache residency ratio is (%.0f%%)\n", treeName, residentLeaves)
+	fmt.Printf("[PREFETCH] Tree %s nodes page cache residency ratio is %.0f\n", treeName, residentNodes)
+	fmt.Printf("[PREFETCH] Tree %s leaves page cache residency ratio is %.0f\n", treeName, residentLeaves)
 	if errNodes == nil && errLeaves == nil {
 		if residentNodes >= threshold && residentLeaves >= threshold {
 			fmt.Printf("[PREFETCH] Skipped prefetching for tree %s\n", treeName)
