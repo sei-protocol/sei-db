@@ -689,6 +689,7 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 
 	_ = streamFileSequential(filepath.Join(snapshotDir, FileNameNodes))
 	_ = streamFileSequential(filepath.Join(snapshotDir, FileNameLeaves))
+	_ = streamFileSequential(filepath.Join(snapshotDir, FileNameKVs))
 	close(reportDone)
 
 	elapsed := time.Since(startTime).Seconds()
