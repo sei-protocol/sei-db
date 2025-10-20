@@ -615,7 +615,8 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 
 	nodesSize := len(snapshot.nodes)
 	leavesSize := len(snapshot.leaves)
-	totalSize := nodesSize + leavesSize
+	kvSize := len(snapshot.kvs)
+	totalSize := nodesSize + leavesSize + kvSize
 
 	if totalSize == 0 {
 		return
@@ -632,8 +633,8 @@ func (snapshot *Snapshot) prefetchNodesAndLeaves(snapshotDir, treeName string) {
 	}
 
 	startTime := time.Now()
-	fmt.Printf("[PREFETCH] Starting tree '%s': %d MB (nodes %d + leaves %d)\n",
-		treeName, totalSizeMB, nodesSize/(1024*1024), leavesSize/(1024*1024))
+	fmt.Printf("[PREFETCH] Starting tree '%s': %d MB (nodes %d + leaves %d + kvs %d)\n",
+		treeName, totalSizeMB, nodesSize/(1024*1024), leavesSize/(1024*1024), kvSize/(1024*1024))
 
 	var totalRead int64
 	reportDone := make(chan struct{})
