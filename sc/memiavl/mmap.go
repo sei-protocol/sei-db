@@ -56,6 +56,10 @@ func newMmapInternal(path string, withPrefetch bool) (*MmapFile, error) {
 	}, nil
 }
 
+func (m *MmapFile) PrepareForRandomRead() {
+	_ = unix.Madvise(m.data, unix.MADV_RANDOM)
+}
+
 // Close closes the file and mmap handles
 func (m *MmapFile) Close() error {
 	var err error

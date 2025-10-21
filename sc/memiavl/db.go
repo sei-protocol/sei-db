@@ -138,6 +138,10 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 	if err != nil {
 		return nil, err
 	}
+	for _, tree := range mtree.trees {
+		tree.snapshot.nodesMap.PrepareForRandomRead()
+		tree.snapshot.leavesMap.PrepareForRandomRead()
+	}
 
 	// Create rlog manager and open the rlog file
 	streamHandler, err := changelog.NewStream(logger, utils.GetChangelogPath(opts.Dir), changelog.Config{
@@ -226,6 +230,7 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (*DB, error
 	if db.streamHandler == nil {
 		fmt.Println("[Debug] DB steam handler is nil??")
 	}
+
 	return db, nil
 }
 
