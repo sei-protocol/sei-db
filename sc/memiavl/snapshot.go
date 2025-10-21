@@ -597,8 +597,8 @@ func shouldPreloadTree(treeName string) bool {
 	// Parallel loading + madvise hints will maximize throughput even on slow disks
 	activeTrees := map[string]bool{
 		"evm":  true,
-		"bank": false,
-		"acc":  false,
+		"bank": true,
+		"acc":  true,
 	}
 
 	return activeTrees[treeName] // At least 100MB
