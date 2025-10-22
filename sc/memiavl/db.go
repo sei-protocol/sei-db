@@ -410,7 +410,6 @@ func (db *DB) checkBackgroundSnapshotRewrite() error {
 			return fmt.Errorf("switch multitree failed: %w", err)
 		}
 		db.logger.Info("switched to new memiavl snapshot", "version", db.MultiTree.Version())
-
 		db.pruneSnapshots()
 	default:
 	}

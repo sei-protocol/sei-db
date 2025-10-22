@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -687,21 +689,54 @@ func SequentialReadAndFillPageCache(path string) error {
 		}
 	}()
 
-	const bufSize = 16 * 1024 * 1024 // 16MB
-	buf := make([]byte, bufSize)
-	for {
-		readN, er := f.Read(buf)
-		if readN > 0 {
-			atomic.AddInt64(&totalRead, int64(readN))
-		}
-		if er == io.EOF {
-			break
-		}
-		if er != nil {
-			// Best-effort warming; ignore transient errors
-			break
-		}
+	concurrency := runtime.NumCPU()
+	var wg sync.WaitGroup
+	jobs := make(chan [2]int64, concurrency)
+	wg.Add(concurrency)
+	const chunkSize = 16 * 1024 * 1024 // 16MB
+	for w := 0; w < concurrency; w++ {
+		go func() {
+			defer wg.Done()
+			buf := make([]byte, chunkSize)
+			for job := range jobs {
+				off := job[0]
+				n := int(job[1])
+				// ReadAt tries to read full len(buf); loop to fill n bytes
+				remaining := n
+				pos := off
+				for remaining > 0 {
+					readN, er := f.ReadAt(buf[:remaining], pos)
+					if readN > 0 {
+						pos += int64(readN)
+						remaining -= readN
+						atomic.AddInt64(&totalRead, int64(readN))
+					}
+					if er == io.EOF {
+						break
+					}
+					if er != nil && er != io.ErrUnexpectedEOF {
+						// Best-effort warming; ignore transient errors
+						break
+					}
+					if readN == 0 {
+						break
+					}
+				}
+			}
+		}()
 	}
+
+	// Enqueue chunks sequentially to retain locality
+	for offset := int64(0); offset < totalSize; offset += chunkSize {
+		end := offset + chunkSize
+		if end > totalSize {
+			end = totalSize
+		}
+		jobs <- [2]int64{offset, end - offset}
+	}
+	close(jobs)
+	wg.Wait()
+
 	elapsed := time.Since(startTime).Seconds()
 	avgSpeedMBps := float64(totalSize) / elapsed / (1024 * 1024)
 	fmt.Printf("[PREFETCH] Completed prefetching %s: %d MB in %.1fs (%.1f MB/s)\n",
