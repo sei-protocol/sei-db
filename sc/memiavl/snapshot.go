@@ -653,6 +653,8 @@ func SequentialReadAndFillPageCache(path string) error {
 	if err != nil {
 		return err
 	}
+	defer f.Close() // Close file immediately after function returns
+
 	fileInfo, err := f.Stat()
 	if err != nil {
 		return err
@@ -660,10 +662,7 @@ func SequentialReadAndFillPageCache(path string) error {
 	reportDone := make(chan struct{})
 	var totalRead int64
 	totalSize := fileInfo.Size()
-	defer func() {
-		f.Close()
-		close(reportDone)
-	}()
+	defer close(reportDone)
 
 	// Progress reporter
 	go func() {
