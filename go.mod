@@ -19,9 +19,10 @@ require (
 	github.com/tidwall/gjson v1.10.2
 	github.com/tidwall/wal v1.1.7
 	github.com/zbiljic/go-filelock v0.0.0-20170914061330-1dbf7103ab7d
-	go.opentelemetry.io/otel v1.38.0
-	go.opentelemetry.io/otel/metric v1.38.0
+	go.opentelemetry.io/otel v1.32.0
+	go.opentelemetry.io/otel/metric v1.32.0
 	golang.org/x/exp v0.0.0-20230811145659-89c5cff77bcb
+	golang.org/x/sys v0.35.0
 )
 
 require (
@@ -75,11 +76,9 @@ require (
 	github.com/tidwall/tinylru v1.1.0 // indirect
 	go.etcd.io/bbolt v1.3.7 // indirect
 	go.opencensus.io v0.23.0 // indirect
-	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
-	go.opentelemetry.io/otel/trace v1.38.0 // indirect
+	go.opentelemetry.io/otel/trace v1.32.0 // indirect
 	golang.org/x/crypto v0.38.0 // indirect
 	golang.org/x/net v0.40.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
@@ -88,4 +87,5 @@ replace (
 	github.com/cosmos/iavl => github.com/sei-protocol/sei-iavl v0.1.8-0.20230726213826-031d03d26f2d
 	github.com/gogo/protobuf => github.com/regen-network/protobuf v1.3.3-alpha.regen.1
 	github.com/tendermint/tm-db => github.com/sei-protocol/tm-db v0.0.4
+	go.opentelemetry.io/otel/sdk => go.opentelemetry.io/otel/sdk v1.32.0
 )

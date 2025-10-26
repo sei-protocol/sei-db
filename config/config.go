@@ -100,6 +100,10 @@ type StateStoreConfig struct {
 	// Range of blocks after which a XOR hash is computed and stored
 	// defaults to 1,000,000 blocks. Set to -1 to disable.
 	HashRange int64 `json:"hash_range"`
+
+	// DedicatedChangelog defines whether to use a dedicated changelog directory
+	// defaults to false
+	DedicatedChangelog bool `mapstructure:"dedicated-changelog"`
 }
 
 func DefaultStateCommitConfig() StateCommitConfig {

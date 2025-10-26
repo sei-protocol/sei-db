@@ -141,8 +141,8 @@ func (db *Database) SetLatestVersion(version int64) error {
 	return db.storage.Put(defaultWriteOpts, []byte(latestVersionKey), ts[:])
 }
 
-func (db *Database) GetLatestVersion() int64 {
-	return db.latestVersion
+func (db *Database) GetLatestVersion() (int64, error) {
+	return db.latestVersion, nil
 }
 
 // retrieveLatestVersion retrieves the latest version from the database, if not found, return 0.
@@ -169,8 +169,8 @@ func (db *Database) SetEarliestVersion(version int64, ignoreVersion bool) error 
 	return nil
 }
 
-func (db *Database) GetEarliestVersion() int64 {
-	return db.earliestVersion
+func (db *Database) GetEarliestVersion() (int64, error) {
+	return db.earliestVersion, nil
 }
 
 // retrieveEarliestVersion retrieves the earliest version from the database, if not found, return 0.

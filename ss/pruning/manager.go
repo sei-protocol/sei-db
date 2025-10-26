@@ -41,7 +41,11 @@ func (m *Manager) Start() {
 	go func() {
 		for {
 			pruneStartTime := time.Now()
-			latestVersion := m.stateStore.GetLatestVersion()
+			latestVersion, err := m.stateStore.GetLatestVersion()
+			if err != nil {
+				m.logger.Error("failed to get latest version", "err", err)
+				continue
+			}
 			pruneVersion := latestVersion - m.keepRecent
 			if pruneVersion > 0 {
 				// prune all versions up to and including the pruneVersion

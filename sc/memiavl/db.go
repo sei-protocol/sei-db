@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/sei-protocol/sei-db/common/metrics"
+
 	"github.com/cosmos/iavl"
 	errorutils "github.com/sei-protocol/sei-db/common/errors"
 	"github.com/sei-protocol/sei-db/common/logger"
@@ -92,7 +94,7 @@ const (
 func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (database *DB, _err error) {
 	startTime := time.Now()
 	defer func() {
-		otelMetrics.RestartLatency.Record(
+		metrics.SeiDBMetrics.RestartLatency.Record(
 			context.Background(),
 			time.Since(startTime).Seconds(),
 			metric.WithAttributes(attribute.Bool("success", _err == nil)),
@@ -308,9 +310,9 @@ func (db *DB) ApplyChangeSets(changeSets []*proto.NamedChangeSet) (_err error) {
 
 	startTime := time.Now()
 	defer func() {
-		otelMetrics.ApplyChangesetLatency.Record(
+		metrics.SeiDBMetrics.ApplyChangesetLatency.Record(
 			context.Background(),
-			time.Since(startTime).Seconds(),
+			int64(time.Since(startTime).Milliseconds()),
 			metric.WithAttributes(attribute.Bool("success", _err == nil)),
 		)
 	}()
@@ -484,13 +486,13 @@ func (db *DB) Commit() (version int64, _err error) {
 	startTime := time.Now()
 	defer func() {
 		ctx := context.Background()
-		otelMetrics.CommitLatency.Record(
+		metrics.SeiDBMetrics.CommitLatency.Record(
 			ctx,
-			time.Since(startTime).Seconds(),
+			int64(time.Since(startTime).Milliseconds()),
 			metric.WithAttributes(attribute.Bool("success", _err == nil)),
 		)
-		otelMetrics.MemNodeTotalSize.Record(ctx, TotalMemNodeSize.Load())
-		otelMetrics.NumOfMemNode.Record(ctx, TotalNumOfMemNode.Load())
+		metrics.SeiDBMetrics.MemNodeTotalSize.Record(ctx, TotalMemNodeSize.Load())
+		metrics.SeiDBMetrics.NumOfMemNode.Record(ctx, TotalNumOfMemNode.Load())
 	}()
 
 	db.mtx.Lock()
@@ -658,7 +660,7 @@ func (db *DB) rewriteSnapshotBackground() error {
 
 		cloned.logger.Info("finished best-effort catchup", "version", cloned.Version(), "latest", mtree.Version())
 		ch <- snapshotResult{mtree: mtree}
-		otelMetrics.SnapshotCreationLatency.Record(
+		metrics.SeiDBMetrics.SnapshotCreationLatency.Record(
 			context.Background(),
 			time.Since(startTime).Seconds(),
 		)

@@ -40,7 +40,7 @@ func (s *StorageTestSuite) TestDatabaseLatestVersion() {
 	db, err := s.NewDB(tempDir, s.Config)
 	s.Require().NoError(err)
 
-	lv := db.GetLatestVersion()
+	lv, err := db.GetLatestVersion()
 	s.Require().NoError(err)
 	s.Require().Zero(lv)
 
@@ -49,7 +49,7 @@ func (s *StorageTestSuite) TestDatabaseLatestVersion() {
 		err = db.SetLatestVersion(i)
 		s.Require().NoError(err)
 
-		lv = db.GetLatestVersion()
+		lv, err = db.GetLatestVersion()
 		s.Require().NoError(err)
 		s.Require().Equal(i, lv)
 	}
@@ -63,7 +63,7 @@ func (s *StorageTestSuite) TestDatabaseLatestVersion() {
 
 	defer func() { _ = newDB.Close() }()
 
-	lv = newDB.GetLatestVersion()
+	lv, err = newDB.GetLatestVersion()
 	s.Require().NoError(err)
 	s.Require().Equal(i-1, lv)
 
@@ -211,7 +211,7 @@ func (s *StorageTestSuite) TestDatabaseApplyChangeset() {
 	}
 	s.Require().NoError(DBApplyChangeset(db, 1, storeKey1, keys, vals))
 
-	lv := db.GetLatestVersion()
+	lv, err := db.GetLatestVersion()
 	s.Require().NoError(err)
 	s.Require().Equal(int64(1), lv)
 
@@ -612,7 +612,7 @@ func (s *StorageTestSuite) TestDatabasePrune() {
 	s.Require().NoError(FillData(db, 10, 50))
 
 	// Verify earliest version is 0
-	earliestVersion := db.GetEarliestVersion()
+	earliestVersion, err := db.GetEarliestVersion()
 	s.Require().NoError(err)
 	s.Require().Equal(int64(0), earliestVersion)
 
@@ -620,11 +620,11 @@ func (s *StorageTestSuite) TestDatabasePrune() {
 	s.Require().NoError(db.Prune(25))
 
 	// Verify earliest version is 26 (first 25 pruned)
-	earliestVersion = db.GetEarliestVersion()
+	earliestVersion, err = db.GetEarliestVersion()
 	s.Require().NoError(err)
 	s.Require().Equal(int64(26), earliestVersion)
 
-	latestVersion := db.GetLatestVersion()
+	latestVersion, err := db.GetLatestVersion()
 	s.Require().NoError(err)
 	s.Require().Equal(int64(50), latestVersion)
 
@@ -653,7 +653,7 @@ func (s *StorageTestSuite) TestDatabasePrune() {
 	s.Require().NoError(db.Prune(50))
 
 	// Verify earliest version is 51 (first 50 pruned)
-	earliestVersion = db.GetEarliestVersion()
+	earliestVersion, err = db.GetEarliestVersion()
 	s.Require().NoError(err)
 	s.Require().Equal(int64(51), earliestVersion)
 
@@ -938,7 +938,8 @@ func (s *StorageTestSuite) TestParallelWriteAndPruning() {
 		defer wg.Done()
 		for i := 10; i < latestVersion; i += prunePeriod {
 			for {
-				v := db.GetLatestVersion()
+				v, err := db.GetLatestVersion()
+				s.Require().NoError(err)
 				if v > int64(i) {
 					s.Require().NoError(db.Prune(v - 1))
 					break

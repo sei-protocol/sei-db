@@ -59,7 +59,10 @@ func NewStateStore(logger logger.Logger, homeDir string, ssConfig config.StateSt
 
 // RecoverStateStore will be called during initialization to recover the state from rlog
 func RecoverStateStore(logger logger.Logger, changelogPath string, stateStore types.StateStore) error {
-	ssLatestVersion := stateStore.GetLatestVersion()
+	ssLatestVersion, err := stateStore.GetLatestVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get latest version: %w", err)
+	}
 	logger.Info(fmt.Sprintf("Recovering from changelog %s with latest SS version %d", changelogPath, ssLatestVersion))
 	streamHandler, err := changelog.NewStream(logger, changelogPath, changelog.Config{})
 	if err != nil {

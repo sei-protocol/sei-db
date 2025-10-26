@@ -197,8 +197,8 @@ func (db *Database) SetLatestVersion(version int64) error {
 	return err
 }
 
-func (db *Database) GetLatestVersion() int64 {
-	return db.latestVersion
+func (db *Database) GetLatestVersion() (int64, error) {
+	return db.latestVersion, nil
 }
 
 // Retrieve latestVersion from db, if not found, return 0.
@@ -236,8 +236,8 @@ func (db *Database) SetEarliestVersion(version int64, ignoreVersion bool) error 
 	return nil
 }
 
-func (db *Database) GetEarliestVersion() int64 {
-	return db.earliestVersion
+func (db *Database) GetEarliestVersion() (int64, error) {
+	return db.earliestVersion, nil
 }
 
 // Retrieves earliest version from db, if not found, return 0
