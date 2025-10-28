@@ -2,8 +2,9 @@ package memiavl
 
 import (
 	"errors"
-	"github.com/sei-protocol/sei-db/common/logger"
 	"runtime"
+
+	"github.com/sei-protocol/sei-db/common/logger"
 
 	"github.com/sei-protocol/sei-db/config"
 )
@@ -62,6 +63,8 @@ func (opts *Options) FillDefaults() {
 	}
 
 	if opts.SnapshotWriterLimit <= 0 {
+		// Use CPU count as default - allows all trees to start immediately
+		// OS will handle I/O scheduling efficiently
 		opts.SnapshotWriterLimit = runtime.NumCPU()
 	}
 

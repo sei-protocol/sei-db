@@ -13,7 +13,9 @@ import (
 
 var (
 	nodeChanSize = 10000
-	bufIOSize    = 64 * 1024 * 1024
+	// Increased from 64MB to 128MB for better write performance
+	// Larger buffer reduces system calls and improves throughput
+	bufIOSize = 128 * 1024 * 1024
 )
 
 type MultiTreeImporter struct {
