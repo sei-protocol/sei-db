@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/alitto/pond"
@@ -402,6 +403,9 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 }
 
 func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.WorkerPool) error {
+	startTime := time.Now()
+	fmt.Printf("[SNAPSHOT WRITE] Starting to write %d trees in parallel\n", len(t.trees))
+
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil { //nolint:gosec
 		return err
 	}
@@ -409,10 +413,16 @@ func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.Work
 	// write the snapshots in parallel and wait all jobs done
 	group, _ := wp.GroupContext(ctx)
 
+	completed := int32(0)
 	for _, entry := range t.trees {
 		tree, name := entry.Tree, entry.Name
 		group.Submit(func() error {
-			return tree.WriteSnapshot(ctx, filepath.Join(dir, name))
+			err := tree.WriteSnapshot(ctx, filepath.Join(dir, name))
+			if err == nil {
+				current := atomic.AddInt32(&completed, 1)
+				fmt.Printf("[SNAPSHOT WRITE] Progress: %d/%d trees completed\n", current, len(t.trees))
+			}
+			return err
 		})
 	}
 
@@ -420,7 +430,11 @@ func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.Work
 		return err
 	}
 
+	elapsed := time.Since(startTime).Seconds()
+	fmt.Printf("[SNAPSHOT WRITE] All %d trees completed in %.1fs\n", len(t.trees), elapsed)
+
 	// write commit info
+	fmt.Printf("[SNAPSHOT WRITE] Writing metadata file\n")
 	metadata := proto.MultiTreeMetadata{
 		CommitInfo:     &t.lastCommitInfo,
 		InitialVersion: int64(t.initialVersion),

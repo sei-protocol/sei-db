@@ -641,28 +641,39 @@ func (db *DB) rewriteSnapshotBackground() error {
 		defer close(ch)
 		startTime := time.Now()
 		cloned.logger.Info("start rewriting snapshot", "version", cloned.Version())
+
+		rewriteStart := time.Now()
 		if err := cloned.RewriteSnapshot(ctx); err != nil {
+			cloned.logger.Error("failed to rewrite snapshot", "error", err, "elapsed", time.Since(rewriteStart).Seconds())
 			ch <- snapshotResult{err: err}
 			return
 		}
-		cloned.logger.Info("finished rewriting snapshot", "version", cloned.Version())
+		cloned.logger.Info("finished rewriting snapshot", "version", cloned.Version(), "elapsed", time.Since(rewriteStart).Seconds())
+
+		loadStart := time.Now()
 		mtree, err := LoadMultiTree(currentPath(cloned.dir), db.opts)
 		if err != nil {
+			cloned.logger.Error("failed to load multitree after snapshot", "error", err)
 			ch <- snapshotResult{err: err}
 			return
 		}
+		cloned.logger.Info("loaded multitree after snapshot", "elapsed", time.Since(loadStart).Seconds())
 
 		// do a best effort catch-up, will do another final catch-up in main thread.
+		catchupStart := time.Now()
 		if err := mtree.Catchup(db.streamHandler, 0); err != nil {
+			cloned.logger.Error("failed to catchup after snapshot", "error", err)
 			ch <- snapshotResult{err: err}
 			return
 		}
+		cloned.logger.Info("finished best-effort catchup", "version", cloned.Version(), "latest", mtree.Version(), "elapsed", time.Since(catchupStart).Seconds())
 
-		cloned.logger.Info("finished best-effort catchup", "version", cloned.Version(), "latest", mtree.Version())
 		ch <- snapshotResult{mtree: mtree}
+		totalElapsed := time.Since(startTime).Seconds()
+		cloned.logger.Info("snapshot background process completed", "total_elapsed", totalElapsed)
 		metrics.SeiDBMetrics.SnapshotCreationLatency.Record(
 			context.Background(),
-			time.Since(startTime).Seconds(),
+			totalElapsed,
 		)
 	}()
 

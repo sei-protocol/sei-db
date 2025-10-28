@@ -375,7 +375,11 @@ func (snapshot *Snapshot) export(callback func(*types.SnapshotNode) bool) {
 
 // WriteSnapshot save the IAVL tree to a new snapshot directory.
 func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
-	return writeSnapshot(ctx, snapshotDir, t.version, func(w *snapshotWriter) (uint32, error) {
+	treeName := filepath.Base(snapshotDir)
+	startTime := time.Now()
+	fmt.Printf("[SNAPSHOT WRITE] Starting to write snapshot for tree: %s\n", treeName)
+
+	err := writeSnapshot(ctx, snapshotDir, t.version, func(w *snapshotWriter) (uint32, error) {
 		if t.root == nil {
 			return 0, nil
 		}
@@ -385,6 +389,15 @@ func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
 		}
 		return w.leafCounter, nil
 	})
+
+	if err != nil {
+		fmt.Printf("[SNAPSHOT WRITE] Failed to write snapshot for tree %s: %v\n", treeName, err)
+		return err
+	}
+
+	elapsed := time.Since(startTime).Seconds()
+	fmt.Printf("[SNAPSHOT WRITE] Completed writing snapshot for tree %s in %.1fs\n", treeName, elapsed)
+	return nil
 }
 
 func writeSnapshot(
@@ -435,31 +448,71 @@ func writeSnapshot(
 	kvsWriter := bufio.NewWriterSize(fpKVs, bufIOSize)
 
 	w := newSnapshotWriter(ctx, nodesWriter, leavesWriter, kvsWriter)
+	w.treeName = filepath.Base(dir) // Set tree name for progress reporting
+
+	writeStart := time.Now()
 	leaves, err := doWrite(w)
 	if err != nil {
 		return err
 	}
+	writeElapsed := time.Since(writeStart).Seconds()
+
+	treeName := filepath.Base(dir)
+	fmt.Printf("[SNAPSHOT WRITE] Tree %s: wrote %d leaves and %d branches in %.1fs\n",
+		treeName, w.leafCounter, w.branchCounter, writeElapsed)
 
 	if leaves > 0 {
+		flushStart := time.Now()
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: starting to flush buffers...\n", treeName)
+
 		if err := nodesWriter.Flush(); err != nil {
 			return err
 		}
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed nodes buffer in %.1fs\n",
+			treeName, time.Since(flushStart).Seconds())
+
+		flushLeavesStart := time.Now()
 		if err := leavesWriter.Flush(); err != nil {
 			return err
 		}
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed leaves buffer in %.1fs\n",
+			treeName, time.Since(flushLeavesStart).Seconds())
+
+		flushKvsStart := time.Now()
 		if err := kvsWriter.Flush(); err != nil {
 			return err
 		}
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed kvs buffer in %.1fs\n",
+			treeName, time.Since(flushKvsStart).Seconds())
+
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: all buffers flushed in %.1fs total\n",
+			treeName, time.Since(flushStart).Seconds())
+
+		syncStart := time.Now()
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: starting to sync files to disk...\n", treeName)
 
 		if err := fpKVs.Sync(); err != nil {
 			return err
 		}
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: synced kvs file in %.1fs\n",
+			treeName, time.Since(syncStart).Seconds())
+
+		syncLeavesStart := time.Now()
 		if err := fpLeaves.Sync(); err != nil {
 			return err
 		}
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: synced leaves file in %.1fs\n",
+			treeName, time.Since(syncLeavesStart).Seconds())
+
+		syncNodesStart := time.Now()
 		if err := fpNodes.Sync(); err != nil {
 			return err
 		}
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: synced nodes file in %.1fs\n",
+			treeName, time.Since(syncNodesStart).Seconds())
+
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: all files synced to disk in %.1fs total\n",
+			treeName, time.Since(syncStart).Seconds())
 	}
 
 	// write metadata
@@ -497,14 +550,21 @@ type snapshotWriter struct {
 
 	// record the current writing offset in kvs file
 	kvsOffset uint64
+
+	// for progress reporting
+	treeName               string
+	lastProgressReport     time.Time
+	progressReportInterval time.Duration
 }
 
 func newSnapshotWriter(ctx context.Context, nodesWriter, leavesWriter, kvsWriter io.Writer) *snapshotWriter {
 	return &snapshotWriter{
-		ctx:          ctx,
-		nodesWriter:  nodesWriter,
-		leavesWriter: leavesWriter,
-		kvWriter:     kvsWriter,
+		ctx:                    ctx,
+		nodesWriter:            nodesWriter,
+		leavesWriter:           leavesWriter,
+		kvWriter:               kvsWriter,
+		lastProgressReport:     time.Now(),
+		progressReportInterval: 30 * time.Second, // Report every 30 seconds
 	}
 }
 
@@ -583,6 +643,14 @@ func (w *snapshotWriter) writeRecursive(node Node) error {
 		return w.ctx.Err()
 	default:
 	}
+
+	// Periodic progress reporting (every 30 seconds)
+	if time.Since(w.lastProgressReport) >= w.progressReportInterval {
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: progress - %d leaves, %d branches written so far\n",
+			w.treeName, w.leafCounter, w.branchCounter)
+		w.lastProgressReport = time.Now()
+	}
+
 	if node.IsLeaf() {
 		return w.writeLeaf(node.Version(), node.Key(), node.Value(), node.Hash())
 	}
