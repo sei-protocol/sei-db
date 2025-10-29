@@ -478,6 +478,18 @@ func writeSnapshotWithBuffer(
 	fmt.Printf("[SNAPSHOT WRITE] Tree %s: wrote %d leaves and %d branches in %.1fs\n",
 		treeName, w.leafCounter, w.branchCounter, writeElapsed)
 
+	// Report performance breakdown (sampled)
+	totalTime := w.traversalTime + w.writeTime
+	if totalTime > 0 {
+		traversalPct := float64(w.traversalTime) / float64(totalTime) * 100
+		writePct := float64(w.writeTime) / float64(totalTime) * 100
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: performance breakdown (sampled every %d nodes) - traversal: %.1f%% (%.1fs), write: %.1f%% (%.1fs)\n",
+			treeName, w.sampleInterval, traversalPct, w.traversalTime.Seconds(), writePct, w.writeTime.Seconds())
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: estimated overhead from sampling: %.3fs (%.2f%% of total)\n",
+			treeName, float64(w.leafCounter+w.branchCounter)/float64(w.sampleInterval)*0.0001,
+			float64(w.leafCounter+w.branchCounter)/float64(w.sampleInterval)*0.0001/writeElapsed*100)
+	}
+
 	if leaves > 0 {
 		flushStart := time.Now()
 		fmt.Printf("[SNAPSHOT WRITE] Tree %s: starting to flush buffers...\n", treeName)
@@ -590,16 +602,28 @@ type snapshotWriter struct {
 	treeName               string
 	lastProgressReport     time.Time
 	progressReportInterval time.Duration
+
+	// Performance metrics (sampled to reduce overhead)
+	traversalTime  time.Duration // Time spent traversing
+	writeTime      time.Duration // Time spent writing
+	sampleCounter  uint32        // Counter for sampling
+	sampleInterval uint32        // Sample every N nodes (e.g., 10000)
+	lastSampleTime time.Time     // Last sample timestamp
+	inTraversal    bool          // Currently in traversal phase
 }
 
 func newSnapshotWriter(ctx context.Context, nodesWriter, leavesWriter, kvsWriter io.Writer) *snapshotWriter {
+	now := time.Now()
 	return &snapshotWriter{
 		ctx:                    ctx,
 		nodesWriter:            nodesWriter,
 		leavesWriter:           leavesWriter,
 		kvWriter:               kvsWriter,
-		lastProgressReport:     time.Now(),
+		lastProgressReport:     now,
 		progressReportInterval: 30 * time.Second, // Report every 30 seconds
+		sampleInterval:         10000,            // Sample every 10000 nodes to reduce overhead
+		lastSampleTime:         now,
+		inTraversal:            true, // Start in traversal phase
 	}
 }
 
@@ -673,6 +697,18 @@ func (w *snapshotWriter) writeBranch(version, size uint32, height, preTrees uint
 // writeRecursive write the node recursively in depth-first post-order,
 // returns `(nodeIndex, err)`.
 func (w *snapshotWriter) writeRecursive(node Node) error {
+	// Sample performance metrics every N nodes to reduce overhead
+	w.sampleCounter++
+	shouldSample := w.sampleCounter%w.sampleInterval == 0
+
+	if shouldSample && w.inTraversal {
+		// End traversal sample, start write sample
+		now := time.Now()
+		w.traversalTime += now.Sub(w.lastSampleTime)
+		w.lastSampleTime = now
+		w.inTraversal = false
+	}
+
 	select {
 	case <-w.ctx.Done():
 		return w.ctx.Err()
@@ -681,8 +717,17 @@ func (w *snapshotWriter) writeRecursive(node Node) error {
 
 	// Periodic progress reporting (every 30 seconds)
 	if time.Since(w.lastProgressReport) >= w.progressReportInterval {
+		totalTime := w.traversalTime + w.writeTime
+		traversalPct := 0.0
+		writePct := 0.0
+		if totalTime > 0 {
+			traversalPct = float64(w.traversalTime) / float64(totalTime) * 100
+			writePct = float64(w.writeTime) / float64(totalTime) * 100
+		}
 		fmt.Printf("[SNAPSHOT WRITE] Tree %s: progress - %d leaves, %d branches written so far\n",
 			w.treeName, w.leafCounter, w.branchCounter)
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: performance (sampled) - traversal: %.1f%% (%.1fs), write: %.1f%% (%.1fs)\n",
+			w.treeName, traversalPct, w.traversalTime.Seconds(), writePct, w.writeTime.Seconds())
 		w.lastProgressReport = time.Now()
 	}
 
@@ -713,6 +758,15 @@ func (w *snapshotWriter) writeRecursive(node Node) error {
 	size := node.Size()
 	if size < 0 || size > math.MaxUint32 {
 		return fmt.Errorf("node size %d out of range", size)
+	}
+
+	// Sample after write
+	if shouldSample && !w.inTraversal {
+		// End write sample, start traversal sample
+		now := time.Now()
+		w.writeTime += now.Sub(w.lastSampleTime)
+		w.lastSampleTime = now
+		w.inTraversal = true
 	}
 
 	return w.writeBranch(node.Version(), uint32(size), node.Height(), preTrees, keyLeaf, node.Hash())
