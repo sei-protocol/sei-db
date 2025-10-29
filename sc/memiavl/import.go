@@ -20,7 +20,9 @@ var (
 
 	// Extra large buffer for very large trees (like EVM)
 	// Used when tree size > 50GB to further reduce flush overhead
-	bufIOSizeLarge = 512 * 1024 * 1024
+	// Increased to 1GB to reduce flush frequency for very large trees
+	// Note: This is per file (nodes, leaves, kvs), so total is 3GB per large tree
+	bufIOSizeLarge = 1 * 1024 * 1024 * 1024 // 1GB
 )
 
 type MultiTreeImporter struct {

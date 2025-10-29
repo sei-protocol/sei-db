@@ -12,6 +12,7 @@ import (
 
 	"github.com/alitto/pond"
 	"golang.org/x/exp/slices"
+	"golang.org/x/sys/unix"
 
 	"github.com/cosmos/iavl"
 	"github.com/sei-protocol/sei-db/common/errors"
@@ -402,16 +403,177 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 	return nil
 }
 
-func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.WorkerPool) error {
+// PrefetchSnapshot prefetches all snapshot files into page cache
+// This is critical for cold-start rewrite performance
+// NOTE: This function directly reads files from disk, not using in-memory snapshot objects
+func (t *MultiTree) PrefetchSnapshot(snapshotDir string, prefetchThreshold float64) error {
+	fmt.Printf("[PREFETCH] Starting to prefetch snapshot from: %s\n", snapshotDir)
 	startTime := time.Now()
+
+	// Strategy: Prefetch EVM tree first (largest), then others in parallel
+	// This matches the write order and maximizes cache utilization
+
+	// Get list of tree directories
+	entries, err := os.ReadDir(snapshotDir)
+	if err != nil {
+		return fmt.Errorf("failed to read snapshot dir: %w", err)
+	}
+
+	var evmDir string
+	otherDirs := make([]string, 0, len(entries))
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		treeName := entry.Name()
+		treeDir := filepath.Join(snapshotDir, treeName)
+
+		// Check if this tree should be prefetched
+		if !shouldPreloadTree(treeName) {
+			continue
+		}
+
+		if treeName == "evm" {
+			evmDir = treeDir
+		} else {
+			otherDirs = append(otherDirs, treeDir)
+		}
+	}
+
+	// Phase 1: Prefetch EVM tree first (if it exists)
+	if evmDir != "" {
+		fmt.Printf("[PREFETCH] Phase 1: Prefetching EVM tree first (largest tree)\n")
+		evmStart := time.Now()
+		prefetchTreeFiles(evmDir, prefetchThreshold)
+		evmElapsed := time.Since(evmStart).Seconds()
+		fmt.Printf("[PREFETCH] Phase 1 completed: EVM tree prefetched in %.1fs\n", evmElapsed)
+	}
+
+	// Phase 2: Prefetch all other trees in parallel
+	if len(otherDirs) > 0 {
+		fmt.Printf("[PREFETCH] Phase 2: Prefetching %d remaining trees in parallel\n", len(otherDirs))
+		phase2Start := time.Now()
+
+		jobs := make(chan string, len(otherDirs))
+		done := make(chan struct{})
+		workers := 4 // Limit parallel prefetch to avoid I/O thrashing
+
+		for i := 0; i < workers; i++ {
+			go func() {
+				for treeDir := range jobs {
+					prefetchTreeFiles(treeDir, prefetchThreshold)
+				}
+				done <- struct{}{}
+			}()
+		}
+
+		for _, treeDir := range otherDirs {
+			jobs <- treeDir
+		}
+		close(jobs)
+
+		for i := 0; i < workers; i++ {
+			<-done
+		}
+
+		phase2Elapsed := time.Since(phase2Start).Seconds()
+		fmt.Printf("[PREFETCH] Phase 2 completed: %d trees prefetched in %.1fs\n", len(otherDirs), phase2Elapsed)
+	}
+
+	elapsed := time.Since(startTime).Seconds()
+	fmt.Printf("[PREFETCH] All trees prefetched in %.1fs\n", elapsed)
+	return nil
+}
+
+// prefetchTreeFiles prefetches a single tree's files into page cache
+// This function directly reads files from disk to check cache residency
+func prefetchTreeFiles(treeDir string, prefetchThreshold float64) {
+	treeName := filepath.Base(treeDir)
+
+	nodesFile := filepath.Join(treeDir, FileNameNodes)
+	leavesFile := filepath.Join(treeDir, FileNameLeaves)
+
+	// Check if files exist
+	if _, err := os.Stat(nodesFile); err != nil {
+		return // Tree doesn't exist or is empty
+	}
+
+	// Check cache residency by mmaping the files temporarily
+	needsPrefetch := false
+
+	// Check nodes file
+	if f, err := os.Open(nodesFile); err == nil {
+		if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
+			// Mmap to check residency
+			if data, err := unix.Mmap(int(f.Fd()), 0, int(fi.Size()), unix.PROT_READ, unix.MAP_SHARED); err == nil {
+				if ratio, err := residentRatio(data); err == nil {
+					if ratio < prefetchThreshold {
+						fmt.Printf("[PREFETCH] Tree %s nodes cache residency: %.2f (below threshold %.2f)\n", treeName, ratio, prefetchThreshold)
+						needsPrefetch = true
+					} else {
+						fmt.Printf("[PREFETCH] Tree %s nodes cache residency: %.2f (above threshold %.2f, skipping)\n", treeName, ratio, prefetchThreshold)
+					}
+				}
+				unix.Munmap(data)
+			}
+		}
+		f.Close()
+	}
+
+	if !needsPrefetch {
+		// Check leaves file too
+		if f, err := os.Open(leavesFile); err == nil {
+			if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
+				if data, err := unix.Mmap(int(f.Fd()), 0, int(fi.Size()), unix.PROT_READ, unix.MAP_SHARED); err == nil {
+					if ratio, err := residentRatio(data); err == nil {
+						if ratio < prefetchThreshold {
+							fmt.Printf("[PREFETCH] Tree %s leaves cache residency: %.2f (below threshold %.2f)\n", treeName, ratio, prefetchThreshold)
+							needsPrefetch = true
+						}
+					}
+					unix.Munmap(data)
+				}
+			}
+			f.Close()
+		}
+	}
+
+	if !needsPrefetch {
+		fmt.Printf("[PREFETCH] Tree %s: skipping (already in cache)\n", treeName)
+		return
+	}
+
+	// Prefetch files
+	fmt.Printf("[PREFETCH] Tree %s: starting prefetch\n", treeName)
+	startTime := time.Now()
+
+	_ = SequentialReadAndFillPageCache(nodesFile)
+	_ = SequentialReadAndFillPageCache(leavesFile)
+
+	elapsed := time.Since(startTime).Seconds()
+	fmt.Printf("[PREFETCH] Tree %s: completed in %.1fs\n", treeName, elapsed)
+}
+
+func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.WorkerPool) error {
 	fmt.Printf("[SNAPSHOT WRITE] Starting to write %d trees\n", len(t.trees))
 
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil { //nolint:gosec
 		return err
 	}
 
-	// Strategy: Write EVM tree first (largest, ~86% of total time), then write others in parallel
-	// This reduces memory pressure and context switching during the critical EVM write phase
+	// Use priority EVM strategy: write EVM tree first, then others in parallel
+	// Testing shows this is faster than full parallel because:
+	// 1. EVM tree is 73% of total data - writing it alone avoids disk I/O contention
+	// 2. Other trees can write in parallel after EVM is done
+	// 3. With 1GB buffer, EVM tree writes faster without competition
+	return t.writeSnapshotPriorityEVM(ctx, dir, wp)
+}
+
+// writeSnapshotPriorityEVM writes EVM tree first, then others in parallel
+// Best strategy: reduces disk I/O contention for the largest tree
+func (t *MultiTree) writeSnapshotPriorityEVM(ctx context.Context, dir string, wp *pond.WorkerPool) error {
+	startTime := time.Now()
 
 	// Phase 1: Write EVM tree first (if it exists)
 	var evmTree *Tree
@@ -428,7 +590,7 @@ func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.Work
 	}
 
 	if evmTree != nil {
-		fmt.Printf("[SNAPSHOT WRITE] Phase 1: Writing EVM tree first (largest tree)\n")
+		fmt.Printf("[SNAPSHOT WRITE] Phase 1: Writing EVM tree first (largest tree, 73%% of total data)\n")
 		evmStart := time.Now()
 		if err := evmTree.WriteSnapshot(ctx, filepath.Join(dir, evmName)); err != nil {
 			return err
@@ -464,6 +626,47 @@ func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.Work
 
 		phase2Elapsed := time.Since(phase2Start).Seconds()
 		fmt.Printf("[SNAPSHOT WRITE] Phase 2 completed: %d trees written in %.1fs\n", len(otherTrees), phase2Elapsed)
+	}
+
+	elapsed := time.Since(startTime).Seconds()
+	fmt.Printf("[SNAPSHOT WRITE] All %d trees completed in %.1fs\n", len(t.trees), elapsed)
+
+	// write commit info
+	fmt.Printf("[SNAPSHOT WRITE] Writing metadata file\n")
+	metadata := proto.MultiTreeMetadata{
+		CommitInfo:     &t.lastCommitInfo,
+		InitialVersion: int64(t.initialVersion),
+	}
+	bz, err := metadata.Marshal()
+	if err != nil {
+		return err
+	}
+	return WriteFileSync(filepath.Join(dir, MetadataFileName), bz)
+}
+
+// writeSnapshotAllParallel writes all trees in parallel
+// Best for cold cache: better disk I/O utilization
+func (t *MultiTree) writeSnapshotAllParallel(ctx context.Context, dir string, wp *pond.WorkerPool) error {
+	startTime := time.Now()
+	fmt.Printf("[SNAPSHOT WRITE] Writing all %d trees in parallel\n", len(t.trees))
+
+	group, _ := wp.GroupContext(ctx)
+	var completed int32
+
+	for _, entry := range t.trees {
+		tree, name := entry.Tree, entry.Name
+		group.Submit(func() error {
+			err := tree.WriteSnapshot(ctx, filepath.Join(dir, name))
+			if err == nil {
+				current := atomic.AddInt32(&completed, 1)
+				fmt.Printf("[SNAPSHOT WRITE] Progress: %d/%d trees completed\n", current, len(t.trees))
+			}
+			return err
+		})
+	}
+
+	if err := group.Wait(); err != nil {
+		return err
 	}
 
 	elapsed := time.Since(startTime).Seconds()

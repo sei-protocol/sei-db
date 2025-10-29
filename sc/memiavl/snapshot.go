@@ -387,11 +387,11 @@ func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
 	fmt.Printf("[SNAPSHOT WRITE] Starting to write snapshot for tree: %s (size: %d nodes)\n", treeName, treeSize)
 
 	// Choose buffer size based on tree size
-	// Large trees (>100M nodes, ~50GB) use 512MB buffer to reduce flush overhead
+	// Large trees (>100M nodes, ~50GB) use larger buffer to reduce flush overhead
 	bufSize := bufIOSize
 	if treeSize > 100_000_000 {
 		bufSize = bufIOSizeLarge
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: using large buffer (512MB) for better performance\n", treeName)
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: using large buffer (%dMB) for better performance\n", treeName, bufIOSizeLarge/(1024*1024))
 	}
 
 	err := writeSnapshotWithBuffer(ctx, snapshotDir, t.version, bufSize, func(w *snapshotWriter) (uint32, error) {
@@ -530,7 +530,7 @@ func writeSnapshotWithBuffer(
 
 		fmt.Printf("[SNAPSHOT WRITE] Tree %s: all files synced to disk in %.1fs total\n",
 			treeName, time.Since(syncStart).Seconds())
-		
+
 		// Drop written pages from page cache to prevent evicting source snapshot pages
 		// This keeps the read-side (old snapshot) cache hit rate high
 		dropCacheStart := time.Now()
