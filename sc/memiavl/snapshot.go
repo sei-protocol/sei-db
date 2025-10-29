@@ -377,9 +377,24 @@ func (snapshot *Snapshot) export(callback func(*types.SnapshotNode) bool) {
 func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
 	treeName := filepath.Base(snapshotDir)
 	startTime := time.Now()
-	fmt.Printf("[SNAPSHOT WRITE] Starting to write snapshot for tree: %s\n", treeName)
 
-	err := writeSnapshot(ctx, snapshotDir, t.version, func(w *snapshotWriter) (uint32, error) {
+	// Estimate tree size based on node count
+	treeSize := int64(0)
+	if t.root != nil {
+		treeSize = t.root.Size()
+	}
+
+	fmt.Printf("[SNAPSHOT WRITE] Starting to write snapshot for tree: %s (size: %d nodes)\n", treeName, treeSize)
+
+	// Choose buffer size based on tree size
+	// Large trees (>100M nodes, ~50GB) use 512MB buffer to reduce flush overhead
+	bufSize := bufIOSize
+	if treeSize > 100_000_000 {
+		bufSize = bufIOSizeLarge
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: using large buffer (512MB) for better performance\n", treeName)
+	}
+
+	err := writeSnapshotWithBuffer(ctx, snapshotDir, t.version, bufSize, func(w *snapshotWriter) (uint32, error) {
 		if t.root == nil {
 			return 0, nil
 		}
@@ -400,9 +415,11 @@ func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
 	return nil
 }
 
-func writeSnapshot(
+// writeSnapshotWithBuffer writes snapshot with specified buffer size
+func writeSnapshotWithBuffer(
 	ctx context.Context,
 	dir string, version uint32,
+	bufSize int,
 	doWrite func(*snapshotWriter) (uint32, error),
 ) (returnErr error) {
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil { //nolint:gosec
@@ -443,9 +460,9 @@ func writeSnapshot(
 		}
 	}()
 
-	nodesWriter := bufio.NewWriterSize(fpNodes, bufIOSize)
-	leavesWriter := bufio.NewWriterSize(fpLeaves, bufIOSize)
-	kvsWriter := bufio.NewWriterSize(fpKVs, bufIOSize)
+	nodesWriter := bufio.NewWriterSize(fpNodes, bufSize)
+	leavesWriter := bufio.NewWriterSize(fpLeaves, bufSize)
+	kvsWriter := bufio.NewWriterSize(fpKVs, bufSize)
 
 	w := newSnapshotWriter(ctx, nodesWriter, leavesWriter, kvsWriter)
 	w.treeName = filepath.Base(dir) // Set tree name for progress reporting
@@ -537,6 +554,15 @@ func writeSnapshot(
 	}
 
 	return fpMetadata.Sync()
+}
+
+// writeSnapshot is a compatibility wrapper that uses default buffer size
+func writeSnapshot(
+	ctx context.Context,
+	dir string, version uint32,
+	doWrite func(*snapshotWriter) (uint32, error),
+) error {
+	return writeSnapshotWithBuffer(ctx, dir, version, bufIOSize, doWrite)
 }
 
 type snapshotWriter struct {

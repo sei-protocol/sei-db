@@ -13,9 +13,14 @@ import (
 
 var (
 	nodeChanSize = 10000
-	// Increased from 64MB to 128MB for better write performance
+	// Increased from 64MB to 256MB for better write performance
 	// Larger buffer reduces system calls and improves throughput
-	bufIOSize = 128 * 1024 * 1024
+	// For EVM tree (81GB), this reduces flush count from 633 to 316
+	bufIOSize = 256 * 1024 * 1024
+
+	// Extra large buffer for very large trees (like EVM)
+	// Used when tree size > 50GB to further reduce flush overhead
+	bufIOSizeLarge = 512 * 1024 * 1024
 )
 
 type MultiTreeImporter struct {

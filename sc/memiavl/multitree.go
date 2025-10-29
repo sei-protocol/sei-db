@@ -404,30 +404,66 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 
 func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.WorkerPool) error {
 	startTime := time.Now()
-	fmt.Printf("[SNAPSHOT WRITE] Starting to write %d trees in parallel\n", len(t.trees))
+	fmt.Printf("[SNAPSHOT WRITE] Starting to write %d trees\n", len(t.trees))
 
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil { //nolint:gosec
 		return err
 	}
 
-	// write the snapshots in parallel and wait all jobs done
-	group, _ := wp.GroupContext(ctx)
+	// Strategy: Write EVM tree first (largest, ~86% of total time), then write others in parallel
+	// This reduces memory pressure and context switching during the critical EVM write phase
 
-	completed := int32(0)
+	// Phase 1: Write EVM tree first (if it exists)
+	var evmTree *Tree
+	var evmName string
+	otherTrees := make([]NamedTree, 0, len(t.trees))
+
 	for _, entry := range t.trees {
-		tree, name := entry.Tree, entry.Name
-		group.Submit(func() error {
-			err := tree.WriteSnapshot(ctx, filepath.Join(dir, name))
-			if err == nil {
-				current := atomic.AddInt32(&completed, 1)
-				fmt.Printf("[SNAPSHOT WRITE] Progress: %d/%d trees completed\n", current, len(t.trees))
-			}
-			return err
-		})
+		if entry.Name == "evm" {
+			evmTree = entry.Tree
+			evmName = entry.Name
+		} else {
+			otherTrees = append(otherTrees, entry)
+		}
 	}
 
-	if err := group.Wait(); err != nil {
-		return err
+	if evmTree != nil {
+		fmt.Printf("[SNAPSHOT WRITE] Phase 1: Writing EVM tree first (largest tree)\n")
+		evmStart := time.Now()
+		if err := evmTree.WriteSnapshot(ctx, filepath.Join(dir, evmName)); err != nil {
+			return err
+		}
+		evmElapsed := time.Since(evmStart).Seconds()
+		fmt.Printf("[SNAPSHOT WRITE] Phase 1 completed: EVM tree written in %.1fs\n", evmElapsed)
+		fmt.Printf("[SNAPSHOT WRITE] Progress: 1/%d trees completed\n", len(t.trees))
+	}
+
+	// Phase 2: Write all other trees in parallel
+	if len(otherTrees) > 0 {
+		fmt.Printf("[SNAPSHOT WRITE] Phase 2: Writing %d remaining trees in parallel\n", len(otherTrees))
+		phase2Start := time.Now()
+
+		group, _ := wp.GroupContext(ctx)
+		completed := int32(1) // Start from 1 (EVM already done)
+
+		for _, entry := range otherTrees {
+			tree, name := entry.Tree, entry.Name
+			group.Submit(func() error {
+				err := tree.WriteSnapshot(ctx, filepath.Join(dir, name))
+				if err == nil {
+					current := atomic.AddInt32(&completed, 1)
+					fmt.Printf("[SNAPSHOT WRITE] Progress: %d/%d trees completed\n", current, len(t.trees))
+				}
+				return err
+			})
+		}
+
+		if err := group.Wait(); err != nil {
+			return err
+		}
+
+		phase2Elapsed := time.Since(phase2Start).Seconds()
+		fmt.Printf("[SNAPSHOT WRITE] Phase 2 completed: %d trees written in %.1fs\n", len(otherTrees), phase2Elapsed)
 	}
 
 	elapsed := time.Since(startTime).Seconds()
