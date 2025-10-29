@@ -12,7 +12,14 @@ import (
 )
 
 var (
-	nodeChanSize = 10000
+	// Pipeline buffer size - controls how many operations can be queued
+	// Larger values allow more parallelism between traversal and writes
+	// Increased to 2000000 to prevent channel saturation (was seeing 82.8% fill)
+	// Memory usage: ~2000000 * (avg_op_size ~120 bytes) * 3 channels = ~720MB
+	// This allows ~0.4% of EVM tree (512M nodes) to buffer, preventing bottleneck
+	// Trade-off: 720MB memory for preventing write goroutines from blocking traversal
+	nodeChanSize = 2000000
+
 	// Increased from 64MB to 256MB for better write performance
 	// Larger buffer reduces system calls and improves throughput
 	// For EVM tree (81GB), this reduces flush count from 633 to 316
@@ -20,9 +27,14 @@ var (
 
 	// Extra large buffer for very large trees (like EVM)
 	// Used when tree size > 50GB to further reduce flush overhead
-	// Increased to 1GB to reduce flush frequency for very large trees
-	// Note: This is per file (nodes, leaves, kvs), so total is 3GB per large tree
-	bufIOSizeLarge = 1 * 1024 * 1024 * 1024 // 1GB
+	// Reduced back to 256MB to free memory for page cache
+	// Analysis shows: 2GB buffer causes page cache eviction, leading to:
+	//   - Random small I/O (30KB/op) due to cache misses
+	//   - Low queue depth (1-4) from single-threaded traversal
+	//   - 100% disk utilization but only 40% IOPS usage
+	// With 256MB: 3 files × 256MB = 768MB total (vs 6GB)
+	// Frees 5GB+ for page cache to reduce disk reads
+	bufIOSizeLarge = 256 * 1024 * 1024 // 256MB
 )
 
 type MultiTreeImporter struct {
@@ -145,7 +157,9 @@ func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (retu
 
 	return writeSnapshot(context.Background(), dir, uint32(version), func(w *snapshotWriter) (uint32, error) {
 		i := &importer{
-			snapshotWriter: *w,
+			w:           w,
+			leavesStack: make([]uint32, 0),
+			nodeStack:   make([]*MemNode, 0),
 		}
 
 		for node := range nodes {
@@ -158,7 +172,7 @@ func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (retu
 		case 0:
 			return 0, nil
 		case 1:
-			return i.leafCounter, nil
+			return i.w.leafCounter, nil
 		default:
 			return 0, fmt.Errorf("invalid node structure, found stack size %v after imported", len(i.leavesStack))
 		}
@@ -166,7 +180,7 @@ func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (retu
 }
 
 type importer struct {
-	snapshotWriter
+	w *snapshotWriter
 
 	// keep track of how many leaves has been written before the pending nodes
 	leavesStack []uint32
@@ -189,10 +203,10 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 			value:   n.Value,
 		}
 		nodeHash := node.Hash()
-		if err := i.writeLeaf(node.version, node.key, node.value, nodeHash); err != nil {
+		if err := i.w.writeLeaf(node.version, node.key, node.value, nodeHash); err != nil {
 			return err
 		}
-		i.leavesStack = append(i.leavesStack, i.leafCounter)
+		i.leavesStack = append(i.leavesStack, i.w.leafCounter)
 		i.nodeStack = append(i.nodeStack, node)
 		return nil
 	}
@@ -228,12 +242,12 @@ func (i *importer) Add(n *types.SnapshotNode) error {
 	if node.size < 0 || node.size > math.MaxUint32 {
 		return fmt.Errorf("node size under/overflows uint32: %d", node.size)
 	}
-	if err := i.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash); err != nil {
+	if err := i.w.writeBranch(node.version, uint32(node.size), node.height, preTrees, keyLeaf, nodeHash); err != nil {
 		return err
 	}
 
 	i.leavesStack = i.leavesStack[:len(i.leavesStack)-2]
-	i.leavesStack = append(i.leavesStack, i.leafCounter)
+	i.leavesStack = append(i.leavesStack, i.w.leafCounter)
 
 	i.nodeStack = i.nodeStack[:len(i.nodeStack)-2]
 	i.nodeStack = append(i.nodeStack, node)
