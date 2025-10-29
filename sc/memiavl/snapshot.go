@@ -489,8 +489,29 @@ func writeSnapshotWithBuffer(
 	fmt.Printf("[SNAPSHOT WRITE] Tree %s: wrote %d leaves and %d branches in %.1fs (traversal: %.1fs, wait: %.1fs)\n",
 		treeName, w.leafCounter, w.branchCounter, writeElapsed, traversalElapsed, waitElapsed)
 
-	// Report final pipeline metrics
-	w.reportPipelineMetrics()
+	// Report final pipeline metrics only if there were bottlenecks
+	maxFillPct := 0.0
+	if w.maxKvFill > 0 {
+		maxFillPct = float64(w.maxKvFill) / float64(nodeChanSize) * 100
+	}
+	if w.maxLeafFill > 0 {
+		leafPct := float64(w.maxLeafFill) / float64(nodeChanSize) * 100
+		if leafPct > maxFillPct {
+			maxFillPct = leafPct
+		}
+	}
+	if w.maxBranchFill > 0 {
+		branchPct := float64(w.maxBranchFill) / float64(nodeChanSize) * 100
+		if branchPct > maxFillPct {
+			maxFillPct = branchPct
+		}
+	}
+
+	// Only print detailed metrics if channels filled >20% (potential bottleneck)
+	if maxFillPct > 20 {
+		fmt.Printf("[PIPELINE] Tree %s: max channel fill %.1f%% - printing details:\n", w.treeName, maxFillPct)
+		w.reportPipelineMetrics()
+	}
 
 	// Note: Removed misleading sampled metrics
 	// The "traversal/write" timing was measured in the main goroutine only
@@ -822,9 +843,15 @@ func (w *snapshotWriter) writeLeaf(version uint32, key, value, hash []byte) erro
 	atomic.AddInt64(&w.leafFillSum, int64(leafFill))
 	atomic.AddInt64(&w.leafFillCount, 1)
 
-	// Report metrics periodically
+	// Report metrics periodically (only if channels are filling up)
+	// For Export/Import with prefetch, channels rarely fill, so we skip routine reports
 	if time.Since(w.lastMetricsReport) >= 30*time.Second {
-		w.reportPipelineMetrics()
+		// Only report if any channel is >20% full (indicating potential bottleneck)
+		if w.maxKvFill > int(float64(nodeChanSize)*0.2) ||
+			w.maxLeafFill > int(float64(nodeChanSize)*0.2) ||
+			w.maxBranchFill > int(float64(nodeChanSize)*0.2) {
+			w.reportPipelineMetrics()
+		}
 		w.lastMetricsReport = time.Now()
 	}
 
@@ -965,71 +992,41 @@ func (w *snapshotWriter) reportPipelineMetrics() {
 
 	chanCap := float64(cap(w.kvChan))
 
-	// KV channel metrics
-	if kvCount > 0 {
-		kvSum := atomic.LoadInt64(&w.kvFillSum)
-		avgKvFill := float64(kvSum) / float64(kvCount)
-		kvFillPct := avgKvFill / chanCap * 100
-		maxKvFillPct := float64(w.maxKvFill) / chanCap * 100
-
-		fmt.Printf("[PIPELINE] Tree %s: KV channel - avg: %.0f/%.0f (%.1f%%), max: %d/%.0f (%.1f%%)\n",
-			w.treeName, avgKvFill, chanCap, kvFillPct, w.maxKvFill, chanCap, maxKvFillPct)
-
-		if kvFillPct > 80 {
-			fmt.Printf("[PIPELINE] Tree %s: WARNING - KV channel >80%% full, KV writes are bottleneck!\n", w.treeName)
-		}
-	}
-
-	// Leaf channel metrics
-	if leafCount > 0 {
-		leafSum := atomic.LoadInt64(&w.leafFillSum)
-		avgLeafFill := float64(leafSum) / float64(leafCount)
-		leafFillPct := avgLeafFill / chanCap * 100
-		maxLeafFillPct := float64(w.maxLeafFill) / chanCap * 100
-
-		fmt.Printf("[PIPELINE] Tree %s: Leaf channel - avg: %.0f/%.0f (%.1f%%), max: %d/%.0f (%.1f%%)\n",
-			w.treeName, avgLeafFill, chanCap, leafFillPct, w.maxLeafFill, chanCap, maxLeafFillPct)
-
-		if leafFillPct > 80 {
-			fmt.Printf("[PIPELINE] Tree %s: WARNING - Leaf channel >80%% full, leaf writes are bottleneck!\n", w.treeName)
-		}
-	}
-
-	// Branch channel metrics
-	if branchCount > 0 {
-		branchSum := atomic.LoadInt64(&w.branchFillSum)
-		avgBranchFill := float64(branchSum) / float64(branchCount)
-		branchFillPct := avgBranchFill / chanCap * 100
-		maxBranchFillPct := float64(w.maxBranchFill) / chanCap * 100
-
-		fmt.Printf("[PIPELINE] Tree %s: Branch channel - avg: %.0f/%.0f (%.1f%%), max: %d/%.0f (%.1f%%)\n",
-			w.treeName, avgBranchFill, chanCap, branchFillPct, w.maxBranchFill, chanCap, maxBranchFillPct)
-
-		if branchFillPct > 80 {
-			fmt.Printf("[PIPELINE] Tree %s: WARNING - Branch channel >80%% full, branch writes are bottleneck!\n", w.treeName)
-		}
-	}
-
-	// Overall assessment
+	// Find the most filled channel
+	maxChannel := ""
 	maxFillPct := 0.0
+
 	if kvCount > 0 {
-		maxFillPct = float64(atomic.LoadInt64(&w.kvFillSum)) / float64(kvCount) / chanCap * 100
-	}
-	if leafCount > 0 {
-		leafPct := float64(atomic.LoadInt64(&w.leafFillSum)) / float64(leafCount) / chanCap * 100
-		if leafPct > maxFillPct {
-			maxFillPct = leafPct
-		}
-	}
-	if branchCount > 0 {
-		branchPct := float64(atomic.LoadInt64(&w.branchFillSum)) / float64(branchCount) / chanCap * 100
-		if branchPct > maxFillPct {
-			maxFillPct = branchPct
+		maxKvFillPct := float64(w.maxKvFill) / chanCap * 100
+		if maxKvFillPct > maxFillPct {
+			maxFillPct = maxKvFillPct
+			maxChannel = "KV"
 		}
 	}
 
-	if maxFillPct < 20 {
-		fmt.Printf("[PIPELINE] Tree %s: All channels <20%% full, traversal is slower than writes (good for parallelism)\n", w.treeName)
+	if leafCount > 0 {
+		maxLeafFillPct := float64(w.maxLeafFill) / chanCap * 100
+		if maxLeafFillPct > maxFillPct {
+			maxFillPct = maxLeafFillPct
+			maxChannel = "Leaf"
+		}
+	}
+
+	if branchCount > 0 {
+		maxBranchFillPct := float64(w.maxBranchFill) / chanCap * 100
+		if maxBranchFillPct > maxFillPct {
+			maxFillPct = maxBranchFillPct
+			maxChannel = "Branch"
+		}
+	}
+
+	// Only print if there's a potential bottleneck (>20% fill)
+	if maxFillPct > 80 {
+		fmt.Printf("[PIPELINE] Tree %s: WARNING - %s channel %.1f%% full, writes are bottleneck!\n",
+			w.treeName, maxChannel, maxFillPct)
+	} else if maxFillPct > 20 {
+		fmt.Printf("[PIPELINE] Tree %s: %s channel max %.1f%% full (writes keeping up)\n",
+			w.treeName, maxChannel, maxFillPct)
 	}
 }
 
@@ -1108,6 +1105,37 @@ func createFile(name string) (*os.File, error) {
 	return os.OpenFile(filepath.Clean(name), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 }
 
+// PrefetchFiles loads all snapshot files (nodes, leaves, kvs) into page cache
+// This is critical for Export/Import performance: converts random I/O to cache hits
+// Unlike prefetchSnapshot, this always prefetches all files without threshold checks
+func (snapshot *Snapshot) PrefetchFiles() error {
+	if snapshot.nodesMap == nil || snapshot.leavesMap == nil || snapshot.kvsMap == nil {
+		return nil // Empty snapshot or already closed
+	}
+
+	// Get file paths from mmap handles
+	nodesPath := snapshot.nodesMap.file.Name()
+	leavesPath := snapshot.leavesMap.file.Name()
+	kvsPath := snapshot.kvsMap.file.Name()
+
+	// Prefetch nodes file
+	if err := SequentialReadAndFillPageCache(nodesPath); err != nil {
+		return fmt.Errorf("failed to prefetch nodes: %w", err)
+	}
+
+	// Prefetch leaves file
+	if err := SequentialReadAndFillPageCache(leavesPath); err != nil {
+		return fmt.Errorf("failed to prefetch leaves: %w", err)
+	}
+
+	// Prefetch kvs file (most important for Export - eliminates random I/O!)
+	if err := SequentialReadAndFillPageCache(kvsPath); err != nil {
+		return fmt.Errorf("failed to prefetch kvs: %w", err)
+	}
+
+	return nil
+}
+
 // prefetchSnapshot sequentially reads snapshot files into page cache
 // This is critical for cold-start performance: eliminates 99% of random I/O during replay
 func (snapshot *Snapshot) prefetchSnapshot(snapshotDir string, prefetchThreshold float64) {
@@ -1179,7 +1207,6 @@ func SequentialReadAndFillPageCache(filePath string) error {
 	// This tells the kernel to:
 	// 1. Read sequentially (MADV_SEQUENTIAL) - enables aggressive readahead
 	// 2. Keep in cache (MADV_WILLNEED) - prioritize retention
-	// 3. Don't dump (MADV_DONTDUMP) - exclude from core dumps, hints at importance
 	// This helps prevent eviction when write buffers compete for memory
 	totalSize := fileInfo.Size()
 	if totalSize > 0 {
@@ -1189,11 +1216,9 @@ func SequentialReadAndFillPageCache(filePath string) error {
 			_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
 			// Tell kernel we need this data soon - start readahead immediately
 			_ = unix.Madvise(data, unix.MADV_WILLNEED)
-			// Hint that this data is important - helps with retention priority
-			_ = unix.Madvise(data, unix.MADV_DONTDUMP)
 			// Unmap after setting hints - the hints persist on the underlying pages
 			defer unix.Munmap(data)
-			fmt.Printf("[PREFETCH] Applied madvise hints (SEQUENTIAL + WILLNEED + DONTDUMP) to %s\n", filePath)
+			fmt.Printf("[PREFETCH] Applied madvise hints (SEQUENTIAL + WILLNEED) to %s\n", filePath)
 		}
 	}
 

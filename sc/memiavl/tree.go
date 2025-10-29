@@ -1,14 +1,18 @@
 package memiavl
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"sync"
+	"time"
 
 	ics23 "github.com/confio/ics23/go"
 	"github.com/cosmos/iavl"
+	errorutils "github.com/sei-protocol/sei-db/common/errors"
 	"github.com/sei-protocol/sei-db/common/logger"
 	"github.com/sei-protocol/sei-db/common/utils"
 	"github.com/sei-protocol/sei-db/sc/types"
@@ -372,4 +376,111 @@ func (t *Tree) GetProof(key []byte) *ics23.CommitmentProof {
 
 	return commitmentProof
 
+}
+
+// RewriteSnapshotViaExport rewrites the snapshot using Export/Import approach
+// This is more efficient than recursive traversal because it uses sequential I/O
+// instead of random access, which is much faster especially for large trees.
+//
+// Performance comparison (EVM tree, 512M nodes):
+//   - Recursive traversal: 270k nodes/s (random I/O, 1800 read IOPS)
+//   - Export/Import: Expected 600-900k nodes/s (sequential I/O)
+//
+// The Export approach reads files sequentially:
+//   - nodes file: sequential read (i++)
+//   - leaves file: sequential read (j++)
+//   - kvs file: mostly sequential (ordered offsets)
+// This results in much better disk utilization and cache efficiency.
+func (t *Tree) RewriteSnapshotViaExport(ctx context.Context, newDir string) error {
+	t.mtx.RLock()
+	defer t.mtx.RUnlock()
+
+	// Check if we have a snapshot to export
+	if t.snapshot == nil {
+		return fmt.Errorf("no snapshot available for export")
+	}
+
+	treeName := filepath.Base(newDir)
+	startTime := time.Now()
+	
+	fmt.Printf("[EXPORT] Starting to export tree: %s (version: %d)\n", treeName, t.version)
+
+	// Create exporter
+	exporter := t.snapshot.Export()
+	defer exporter.Close()
+
+	// Create channel for streaming nodes
+	// Buffer size balances memory usage vs throughput
+	nodeChan := make(chan *types.SnapshotNode, 10000)
+	errChan := make(chan error, 1)
+
+	// Start exporter goroutine
+	go func() {
+		defer close(nodeChan)
+		nodeCount := 0
+		lastReport := time.Now()
+		lastReportCount := 0
+		totalNodes := t.snapshot.nodesLen() + t.snapshot.leavesLen() // Total nodes (branches + leaves)
+		
+		for {
+			node, err := exporter.Next()
+			if err != nil {
+				if errors.Is(err, errorutils.ErrorExportDone) {
+					elapsed := time.Since(startTime).Seconds()
+					avgRate := float64(nodeCount) / elapsed
+					fmt.Printf("[EXPORT] Tree %s: exported %d nodes in %.1fs (avg: %.0fk nodes/s)\n",
+						treeName, nodeCount, elapsed, avgRate/1000)
+					break
+				}
+				errChan <- fmt.Errorf("export error: %w", err)
+				return
+			}
+
+			nodeCount++
+			
+			// Progress reporting every 30 seconds
+			if time.Since(lastReport) >= 30*time.Second {
+				elapsed := time.Since(lastReport).Seconds()
+				nodesInPeriod := nodeCount - lastReportCount
+				rate := float64(nodesInPeriod) / elapsed
+				progress := float64(nodeCount) * 100.0 / float64(totalNodes)
+				
+				fmt.Printf("[EXPORT] Tree %s: %d/%d nodes (%.1f%%) - %.0fk nodes/s in last 30s\n",
+					treeName, nodeCount, totalNodes, progress, rate/1000)
+				
+				lastReport = time.Now()
+				lastReportCount = nodeCount
+			}
+
+			select {
+			case nodeChan <- node:
+			case <-ctx.Done():
+				errChan <- ctx.Err()
+				return
+			}
+		}
+	}()
+
+	// Import nodes to new snapshot
+	fmt.Printf("[IMPORT] Starting to import tree: %s\n", treeName)
+	importStart := time.Now()
+	
+	err := doImport(newDir, int64(t.version), nodeChan)
+	if err != nil {
+		return fmt.Errorf("import error: %w", err)
+	}
+
+	importElapsed := time.Since(importStart).Seconds()
+	totalElapsed := time.Since(startTime).Seconds()
+	
+	fmt.Printf("[IMPORT] Tree %s: import completed in %.1fs\n", treeName, importElapsed)
+	fmt.Printf("[EXPORT/IMPORT] Tree %s: total time %.1fs (export+import)\n", treeName, totalElapsed)
+
+	// Check for exporter errors
+	select {
+	case err := <-errChan:
+		return err
+	default:
+		return nil
+	}
 }

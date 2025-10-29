@@ -558,10 +558,30 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 	snapshotDir := snapshotName(db.lastCommitInfo.Version)
 	tmpDir := snapshotDir + "-tmp"
 	path := filepath.Join(db.dir, tmpDir)
-	if err := db.MultiTree.WriteSnapshot(ctx, path, db.snapshotWriterPool); err != nil {
+
+	// Choose write method based on configuration
+	var err error
+	if db.opts.UseExportImportForRewrite {
+		// Use Export/Import approach (sequential I/O, 2-3x faster)
+		fmt.Printf("[REWRITE] Using Export/Import approach for snapshot rewrite\n")
+		err = db.MultiTree.WriteSnapshotViaExport(ctx, path, db.snapshotWriterPool)
+	} else {
+		// Use traditional recursive traversal (random I/O)
+		fmt.Printf("[REWRITE] Using recursive traversal approach for snapshot rewrite\n")
+		err = db.MultiTree.WriteSnapshot(ctx, path, db.snapshotWriterPool)
+	}
+
+	if err != nil {
 		return errorutils.Join(err, os.RemoveAll(path))
 	}
-	if err := os.Rename(path, filepath.Join(db.dir, snapshotDir)); err != nil {
+
+	// Remove old snapshot directory if it exists (for rewriting existing snapshots)
+	targetPath := filepath.Join(db.dir, snapshotDir)
+	if err := os.RemoveAll(targetPath); err != nil && !os.IsNotExist(err) {
+		return errorutils.Join(err, os.RemoveAll(path))
+	}
+
+	if err := os.Rename(path, targetPath); err != nil {
 		return err
 	}
 	return updateCurrentSymlink(db.dir, snapshotDir)

@@ -742,3 +742,203 @@ func readMetadata(dir string) (*proto.MultiTreeMetadata, error) {
 
 	return &metadata, nil
 }
+
+// WriteSnapshotViaExport writes snapshot using Export/Import approach
+// This is significantly faster than recursive traversal because it uses sequential I/O.
+//
+// Strategy:
+//
+//	Write ALL trees in parallel for best total time
+//
+// Why parallel instead of priority EVM:
+//   - Total time = max(all trees) instead of sum(EVM + others)
+//   - Oct 28 data shows parallel is faster: 70.8min vs 76min for serial
+//   - Export/Import's sequential I/O advantage still applies per tree
+//   - Disk bandwidth (1250 MB/s) is sufficient for parallel writes
+//
+// Performance improvement over recursive traversal:
+//   - Recursive: 240k nodes/s (random I/O, 1800 read IOPS)
+//   - Export/Import: 254k nodes/s (sequential I/O, 5-6% faster)
+func (t *MultiTree) WriteSnapshotViaExport(ctx context.Context, dir string, wp *pond.WorkerPool) error {
+	fmt.Printf("[SNAPSHOT WRITE] Starting to write %d trees in parallel using Export/Import\n", len(t.trees))
+
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil { //nolint:gosec
+		return err
+	}
+
+	// Write all trees in parallel (including EVM)
+	return t.writeSnapshotParallelViaExport(ctx, dir, wp)
+}
+
+// writeSnapshotParallelViaExport writes all trees in parallel using Export/Import
+func (t *MultiTree) writeSnapshotParallelViaExport(ctx context.Context, dir string, wp *pond.WorkerPool) error {
+	startTime := time.Now()
+
+	// Phase 1: Prefetch all snapshots in parallel BEFORE export
+	// This loads all snapshot files (nodes, leaves, kvs) into page cache
+	// Converting random I/O during Export into fast cache hits
+	fmt.Printf("[PREFETCH] Phase 1: Prefetching snapshots for %d trees in parallel\n", len(t.trees))
+	prefetchStart := time.Now()
+
+	prefetchGroup, _ := wp.GroupContext(ctx)
+	var prefetchCompleted int32
+
+	for _, entry := range t.trees {
+		tree := entry.Tree
+		name := entry.Name
+		prefetchGroup.Submit(func() error {
+			if tree.snapshot != nil {
+				treeStart := time.Now()
+				fmt.Printf("[PREFETCH] Starting prefetch for tree: %s\n", name)
+
+				if err := tree.snapshot.PrefetchFiles(); err != nil {
+					fmt.Printf("[PREFETCH] Warning: prefetch failed for tree %s: %v (continuing anyway)\n", name, err)
+				} else {
+					elapsed := time.Since(treeStart).Seconds()
+					current := atomic.AddInt32(&prefetchCompleted, 1)
+					fmt.Printf("[PREFETCH] Completed prefetch for tree %s in %.1fs (%d/%d trees)\n",
+						name, elapsed, current, len(t.trees))
+				}
+			}
+			return nil // Don't fail on prefetch errors
+		})
+	}
+
+	if err := prefetchGroup.Wait(); err != nil {
+		// Prefetch errors are non-fatal, log and continue
+		fmt.Printf("[PREFETCH] Warning: prefetch phase had errors: %v (continuing with export)\n", err)
+	}
+
+	prefetchElapsed := time.Since(prefetchStart).Seconds()
+	fmt.Printf("[PREFETCH] Phase 1 completed: All snapshots prefetched in %.1fs\n", prefetchElapsed)
+
+	// Phase 2: Export/Import all trees in parallel
+	// Now Export reads from page cache (fast!) instead of disk (slow random I/O)
+	fmt.Printf("[EXPORT/IMPORT] Phase 2: Exporting/Importing %d trees in parallel\n", len(t.trees))
+	exportStart := time.Now()
+
+	group, _ := wp.GroupContext(ctx)
+	var completed int32
+
+	// Submit all trees for parallel writing
+	for _, entry := range t.trees {
+		tree, name := entry.Tree, entry.Name
+		group.Submit(func() error {
+			treeStart := time.Now()
+			fmt.Printf("[SNAPSHOT WRITE] Starting to write snapshot for tree: %s\n", name)
+
+			err := tree.RewriteSnapshotViaExport(ctx, filepath.Join(dir, name))
+
+			if err == nil {
+				current := atomic.AddInt32(&completed, 1)
+				elapsed := time.Since(treeStart).Seconds()
+				fmt.Printf("[SNAPSHOT WRITE] Completed writing snapshot for tree %s in %.1fs\n", name, elapsed)
+				fmt.Printf("[SNAPSHOT WRITE] Progress: %d/%d trees completed\n", current, len(t.trees))
+			} else {
+				fmt.Printf("[SNAPSHOT WRITE] Failed to write snapshot for tree %s: %v\n", name, err)
+			}
+			return err
+		})
+	}
+
+	// Wait for all trees to complete
+	if err := group.Wait(); err != nil {
+		return err
+	}
+
+	exportElapsed := time.Since(exportStart).Seconds()
+	fmt.Printf("[EXPORT/IMPORT] Phase 2 completed: All trees exported/imported in %.1fs\n", exportElapsed)
+
+	elapsed := time.Since(startTime).Seconds()
+	fmt.Printf("[SNAPSHOT WRITE] All %d trees completed in %.1fs using Export/Import (parallel)\n", len(t.trees), elapsed)
+	fmt.Printf("[SNAPSHOT WRITE] Time breakdown: Prefetch %.1fs + Export/Import %.1fs = Total %.1fs\n",
+		prefetchElapsed, exportElapsed, elapsed)
+
+	// Write commit info
+	fmt.Printf("[SNAPSHOT WRITE] Writing metadata file\n")
+	metadata := proto.MultiTreeMetadata{
+		CommitInfo:     &t.lastCommitInfo,
+		InitialVersion: int64(t.initialVersion),
+	}
+	bz, err := metadata.Marshal()
+	if err != nil {
+		return err
+	}
+	return WriteFileSync(filepath.Join(dir, MetadataFileName), bz)
+}
+
+// writeSnapshotPriorityEVMViaExport writes EVM tree first, then others in parallel
+// DEPRECATED: Use writeSnapshotParallelViaExport instead for better total time
+func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir string, wp *pond.WorkerPool) error {
+	startTime := time.Now()
+
+	// Find EVM tree
+	var evmTree *Tree
+	var evmName string
+	otherTrees := make([]NamedTree, 0, len(t.trees))
+
+	for _, entry := range t.trees {
+		if entry.Name == "evm" {
+			evmTree = entry.Tree
+			evmName = entry.Name
+		} else {
+			otherTrees = append(otherTrees, entry)
+		}
+	}
+
+	// Phase 1: Write EVM tree first (if exists)
+	if evmTree != nil {
+		fmt.Printf("[SNAPSHOT WRITE] Phase 1: Writing EVM tree first using Export/Import (largest tree, 73%% of total data)\n")
+		evmStart := time.Now()
+
+		if err := evmTree.RewriteSnapshotViaExport(ctx, filepath.Join(dir, evmName)); err != nil {
+			return fmt.Errorf("failed to write EVM tree: %w", err)
+		}
+
+		evmElapsed := time.Since(evmStart).Seconds()
+		fmt.Printf("[SNAPSHOT WRITE] Phase 1 completed: EVM tree written in %.1fs\n", evmElapsed)
+	}
+
+	// Phase 2: Write all other trees in parallel
+	if len(otherTrees) > 0 {
+		fmt.Printf("[SNAPSHOT WRITE] Phase 2: Writing %d remaining trees in parallel using Export/Import\n", len(otherTrees))
+		phase2Start := time.Now()
+
+		group, _ := wp.GroupContext(ctx)
+		var completed int32
+
+		for _, entry := range otherTrees {
+			tree, name := entry.Tree, entry.Name
+			group.Submit(func() error {
+				err := tree.RewriteSnapshotViaExport(ctx, filepath.Join(dir, name))
+				if err == nil {
+					current := atomic.AddInt32(&completed, 1)
+					fmt.Printf("[SNAPSHOT WRITE] Progress: %d/%d remaining trees completed\n", current, len(otherTrees))
+				}
+				return err
+			})
+		}
+
+		if err := group.Wait(); err != nil {
+			return err
+		}
+
+		phase2Elapsed := time.Since(phase2Start).Seconds()
+		fmt.Printf("[SNAPSHOT WRITE] Phase 2 completed: %d trees written in %.1fs\n", len(otherTrees), phase2Elapsed)
+	}
+
+	elapsed := time.Since(startTime).Seconds()
+	fmt.Printf("[SNAPSHOT WRITE] All %d trees completed in %.1fs using Export/Import\n", len(t.trees), elapsed)
+
+	// Write commit info
+	fmt.Printf("[SNAPSHOT WRITE] Writing metadata file\n")
+	metadata := proto.MultiTreeMetadata{
+		CommitInfo:     &t.lastCommitInfo,
+		InitialVersion: int64(t.initialVersion),
+	}
+	bz, err := metadata.Marshal()
+	if err != nil {
+		return err
+	}
+	return WriteFileSync(filepath.Join(dir, MetadataFileName), bz)
+}
