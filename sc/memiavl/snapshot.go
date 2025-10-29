@@ -530,6 +530,15 @@ func writeSnapshotWithBuffer(
 
 		fmt.Printf("[SNAPSHOT WRITE] Tree %s: all files synced to disk in %.1fs total\n",
 			treeName, time.Since(syncStart).Seconds())
+		
+		// Drop written pages from page cache to prevent evicting source snapshot pages
+		// This keeps the read-side (old snapshot) cache hit rate high
+		dropCacheStart := time.Now()
+		dropPageCache(fpKVs)
+		dropPageCache(fpLeaves)
+		dropPageCache(fpNodes)
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: dropped page cache in %.1fs\n",
+			treeName, time.Since(dropCacheStart).Seconds())
 	}
 
 	// write metadata
