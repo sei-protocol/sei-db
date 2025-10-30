@@ -904,6 +904,21 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 
 		prefetch1Elapsed = time.Since(prefetch1Start).Seconds()
 		fmt.Printf("[PREFETCH] Phase 1 completed: EVM prefetched in %.1fs\n", prefetch1Elapsed)
+
+		// Phase 1.5: Re-prefetch EVM to ensure 100% cache hit
+		// Critical: First prefetch may have been partially evicted by bank/acc cache (35GB residual)
+		// Second prefetch triggers LRU eviction of bank/acc, ensuring EVM is fully in cache
+		// With 128GB RAM and 81GB EVM, we should achieve 100% cache hit rate
+		fmt.Printf("[PREFETCH] Phase 1.5: Re-prefetching EVM to ensure 100%% cache hit (evict bank/acc residual)\n")
+		reprefetchStart := time.Now()
+
+		if err := evmTree.snapshot.PrefetchFiles(); err != nil {
+			fmt.Printf("[PREFETCH] Warning: EVM re-prefetch failed: %v (continuing anyway)\n", err)
+		}
+
+		reprefetchElapsed := time.Since(reprefetchStart).Seconds()
+		fmt.Printf("[PREFETCH] Phase 1.5 completed: EVM re-prefetched in %.1fs\n", reprefetchElapsed)
+		prefetch1Elapsed += reprefetchElapsed // Include re-prefetch time in total
 	}
 
 	// Phase 2: Write EVM tree (serial) with cache drop
@@ -1012,7 +1027,7 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 
 	elapsed := time.Since(startTime).Seconds()
 	fmt.Printf("[SNAPSHOT WRITE] All %d trees completed in %.1fs using Export/Import (Priority EVM)\n", len(t.trees), elapsed)
-	fmt.Printf("[SNAPSHOT WRITE] Time breakdown: Prefetch-EVM %.1fs + Write-EVM %.1fs + Prefetch-Large %.1fs + Write-All %.1fs = Total %.1fs\n",
+	fmt.Printf("[SNAPSHOT WRITE] Time breakdown: Prefetch-EVM(x2) %.1fs + Write-EVM %.1fs + Prefetch-Large %.1fs + Write-All %.1fs = Total %.1fs\n",
 		prefetch1Elapsed, evmElapsed, prefetch2Elapsed, phase4Elapsed, elapsed)
 
 	// Write commit info
