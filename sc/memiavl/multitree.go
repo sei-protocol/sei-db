@@ -907,17 +907,32 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 	}
 
 	// Phase 2: Write EVM tree (serial) with cache drop
+	// Also start a background goroutine to keep EVM snapshot in cache
+	// This prevents eviction by PebbleDB RPC reads during the export
 	var evmElapsed float64
 	if evmTree != nil {
 		fmt.Printf("[EXPORT/IMPORT] Phase 2: Writing EVM tree (serial, cache drops prevent eviction)\n")
+
+		// Start background cache keeper for EVM snapshot
+		// This periodically touches the pages to keep them in cache
+		// Critical when RPC is active and PebbleDB is competing for cache
+		keeperCtx, keeperCancel := context.WithCancel(ctx)
+		if evmTree.snapshot != nil {
+			go evmTree.snapshot.KeepInCache(keeperCtx)
+			fmt.Printf("[CACHE KEEPER] Started background cache keeper for EVM snapshot\n")
+		}
+
 		evmStart := time.Now()
 
 		if err := evmTree.RewriteSnapshotViaExport(ctx, filepath.Join(dir, evmName)); err != nil {
+			keeperCancel() // Stop cache keeper on error
 			return fmt.Errorf("failed to write EVM tree: %w", err)
 		}
 
 		evmElapsed = time.Since(evmStart).Seconds()
+		keeperCancel() // Stop cache keeper after EVM is done
 		fmt.Printf("[EXPORT/IMPORT] Phase 2 completed: EVM tree written in %.1fs\n", evmElapsed)
+		fmt.Printf("[CACHE KEEPER] Stopped background cache keeper for EVM snapshot\n")
 	}
 
 	// Phase 3: Prefetch large trees ONLY (bank + acc = 35GB)

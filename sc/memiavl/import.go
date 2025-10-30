@@ -28,11 +28,15 @@ var (
 	// Buffer size for large trees with aggressive cache dropping
 	// Smaller buffer = more frequent flush = more frequent cache drop
 	// Trade-off analysis:
-	//   - 2GB buffer: rare flush (every 2GB) → write data accumulates in cache → read speed degrades
-	//   - 256MB buffer: frequent flush (every 256MB) → immediate cache drop → read speed stays high
+	//   - 256MB buffer: rare flush (every 256MB) → write data accumulates in cache → read speed degrades
+	//   - 64MB buffer: frequent flush (every 64MB) → write data still accumulates → read speed still degrades
+	//   - 16MB buffer: very frequent flush (every 16MB) → immediate cache drop → read speed stays high
 	// With cacheDropWriter: smaller is better for maintaining read cache
-	// 256MB × 3 files = 768MB memory, acceptable trade-off for 4x read speed
-	bufIOSizeLarge = 256 * 1024 * 1024 // 256MB
+	// 16MB × 3 files = 48MB memory, minimal overhead
+	// At 1000k nodes/s, 16MB = ~1.5 seconds of writes, very responsive cache dropping
+	// Critical: When EVM (81GB) is writing, we need to prevent ANY accumulation in cache
+	//           to keep bank+acc (35GB) prefetch data hot for Phase 4
+	bufIOSizeLarge = 16 * 1024 * 1024 // 16MB
 )
 
 type MultiTreeImporter struct {
@@ -41,6 +45,7 @@ type MultiTreeImporter struct {
 	height      int64
 	importer    *TreeImporter
 	fileLock    FileLock
+	ctx         context.Context // Context for cancellation support
 }
 
 func NewMultiTreeImporter(dir string, height uint64) (*MultiTreeImporter, error) {
@@ -59,6 +64,7 @@ func NewMultiTreeImporter(dir string, height uint64) (*MultiTreeImporter, error)
 		height:      int64(height),
 		snapshotDir: snapshotName(int64(height)),
 		fileLock:    fileLock,
+		ctx:         context.Background(), // Default to background context for backward compatibility
 	}, nil
 }
 
@@ -84,7 +90,7 @@ func (mti *MultiTreeImporter) AddTree(name string) error {
 			return err
 		}
 	}
-	mti.importer = NewTreeImporter(filepath.Join(mti.tmpDir(), name), mti.height)
+	mti.importer = NewTreeImporter(mti.ctx, filepath.Join(mti.tmpDir(), name), mti.height)
 	return nil
 }
 
@@ -121,12 +127,12 @@ type TreeImporter struct {
 	quitChan  chan error
 }
 
-func NewTreeImporter(dir string, version int64) *TreeImporter {
+func NewTreeImporter(ctx context.Context, dir string, version int64) *TreeImporter {
 	nodesChan := make(chan *types.SnapshotNode, nodeChanSize)
 	quitChan := make(chan error)
 	go func() {
 		defer close(quitChan)
-		quitChan <- doImport(dir, version, nodesChan)
+		quitChan <- doImport(ctx, dir, version, nodesChan)
 	}()
 	return &TreeImporter{nodesChan, quitChan}
 }
@@ -148,22 +154,47 @@ func (ai *TreeImporter) Close() error {
 }
 
 // doImport a stream of `types.SnapshotNode`s into a new snapshot.
-func doImport(dir string, version int64, nodes <-chan *types.SnapshotNode) (returnErr error) {
+func doImport(ctx context.Context, dir string, version int64, nodes <-chan *types.SnapshotNode) (returnErr error) {
 	if version < 0 || version > int64(math.MaxUint32) {
 		return fmt.Errorf("version under/overflows uint32: %d", version)
 	}
 
-	return writeSnapshot(context.Background(), dir, uint32(version), func(w *snapshotWriter) (uint32, error) {
+	return writeSnapshot(ctx, dir, uint32(version), func(w *snapshotWriter) (uint32, error) {
 		i := &importer{
 			w:           w,
 			leavesStack: make([]uint32, 0),
 			nodeStack:   make([]*MemNode, 0),
 		}
 
+		// Check for context cancellation every 100k nodes to minimize overhead
+		// This provides ~1 second response time for EVM tree (1B nodes / 100k = 10k checks at 1M nodes/s)
+		// while avoiding per-node overhead that caused 20% performance degradation
+		const cancelCheckInterval = 100000
+		nodeCount := 0
+
 		for node := range nodes {
+			nodeCount++
+
+			// Check for cancellation periodically (every 100k nodes)
+			if nodeCount%cancelCheckInterval == 0 {
+				select {
+				case <-ctx.Done():
+					return 0, fmt.Errorf("import cancelled: %w", ctx.Err())
+				default:
+				}
+			}
+
 			if err := i.Add(node); err != nil {
 				return 0, err
 			}
+		}
+
+		// Final check for context cancellation after loop completes
+		// If context was cancelled, channel might be closed prematurely
+		select {
+		case <-ctx.Done():
+			return 0, fmt.Errorf("import cancelled: %w", ctx.Err())
+		default:
 		}
 
 		switch len(i.leavesStack) {

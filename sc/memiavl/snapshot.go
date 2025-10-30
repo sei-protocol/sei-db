@@ -62,16 +62,17 @@ func (w *cacheDropWriter) Write(p []byte) (n int, err error) {
 	w.written += int64(n)
 
 	// Sync + drop cache after EVERY write from bufio.Writer
-	// bufio.Writer flushes when buffer (256MB) is full or manually flushed
+	// bufio.Writer flushes when buffer (16MB) is full or manually flushed
 	// By dropping cache immediately, we prevent write data from accumulating
 	// Trade-off: More sync() calls, but keeps source snapshot in cache
 	if syncErr := w.f.Sync(); syncErr == nil {
 		dropPageCache(w.f)
-		// Log every 1GB to monitor cache dropping frequency
-		// With 256MB buffer: expect ~4 drops per GB per file
-		if w.written%(1024*1024*1024) < int64(n) {
-			fmt.Printf("[CACHE DROP] File %s: dropped cache at %dGB total\n",
-				w.f.Name(), w.written/(1024*1024*1024))
+		// Log every 256MB to monitor cache dropping frequency
+		// With 16MB buffer: expect ~16 drops per GB per file
+		// This helps verify cache is being dropped aggressively enough
+		if w.written%(256*1024*1024) < int64(n) {
+			fmt.Printf("[CACHE DROP] File %s: dropped cache at %dMB total\n",
+				w.f.Name(), w.written/(1024*1024))
 		}
 	}
 
@@ -1163,6 +1164,45 @@ func (snapshot *Snapshot) PrefetchFiles() error {
 	return nil
 }
 
+// KeepInCache periodically touches the snapshot files to keep them in page cache
+// This prevents eviction by other processes (e.g., PebbleDB RPC reads)
+// Critical for maintaining stable Export performance when RPC is active
+func (snapshot *Snapshot) KeepInCache(ctx context.Context) {
+	if snapshot.nodesMap == nil || snapshot.leavesMap == nil || snapshot.kvsMap == nil {
+		return // Empty snapshot or already closed
+	}
+
+	files := []*os.File{
+		snapshot.nodesMap.file,
+		snapshot.leavesMap.file,
+		snapshot.kvsMap.file,
+	}
+
+	ticker := time.NewTicker(5 * time.Second) // Touch every 5 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Touch each file to mark pages as recently used
+			for _, f := range files {
+				if f != nil {
+					// Use fadvise WILLNEED to hint kernel to keep pages in cache
+					// This doesn't guarantee retention but increases priority
+					fi, err := f.Stat()
+					if err == nil && fi.Size() > 0 {
+						// Re-apply WILLNEED hint to boost cache priority
+						// This is a lightweight operation that just updates page flags
+						touchPageCache(f)
+					}
+				}
+			}
+		}
+	}
+}
+
 // prefetchSnapshot sequentially reads snapshot files into page cache
 // This is critical for cold-start performance: eliminates 99% of random I/O during replay
 func (snapshot *Snapshot) prefetchSnapshot(snapshotDir string, prefetchThreshold float64) {
@@ -1218,7 +1258,6 @@ func shouldPreloadTree(treeName string) bool {
 
 func SequentialReadAndFillPageCache(filePath string) error {
 	startTime := time.Now()
-	fmt.Printf("[PREFETCH] Starting to prefetch file: %s\n", filePath)
 	f, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -1230,12 +1269,14 @@ func SequentialReadAndFillPageCache(filePath string) error {
 		return err
 	}
 
+	totalSize := fileInfo.Size()
+	fmt.Printf("[PREFETCH] Starting to prefetch file: %s (size: %d MB)\n", filePath, totalSize/(1024*1024))
+
 	// Mmap the file to apply madvise hints
 	// This tells the kernel to:
 	// 1. Read sequentially (MADV_SEQUENTIAL) - enables aggressive readahead
 	// 2. Keep in cache (MADV_WILLNEED) - prioritize retention
 	// This helps prevent eviction when write buffers compete for memory
-	totalSize := fileInfo.Size()
 	if totalSize > 0 {
 		data, err := unix.Mmap(int(f.Fd()), 0, int(totalSize), unix.PROT_READ, unix.MAP_SHARED)
 		if err == nil {
@@ -1246,7 +1287,12 @@ func SequentialReadAndFillPageCache(filePath string) error {
 			// Unmap after setting hints - the hints persist on the underlying pages
 			defer unix.Munmap(data)
 			fmt.Printf("[PREFETCH] Applied madvise hints (SEQUENTIAL + WILLNEED) to %s\n", filePath)
+		} else {
+			fmt.Printf("[PREFETCH] Warning: mmap failed for %s: %v (continuing with read)\n", filePath, err)
 		}
+	} else {
+		fmt.Printf("[PREFETCH] Skipping empty file: %s\n", filePath)
+		return nil
 	}
 
 	reportDone := make(chan struct{})

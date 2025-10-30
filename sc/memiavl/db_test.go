@@ -20,12 +20,13 @@ import (
 
 func TestRewriteSnapshot(t *testing.T) {
 	db, err := OpenDB(logger.NewNopLogger(), 0, Options{
-		Dir:                       t.TempDir(),
-		CreateIfMissing:           true,
-		InitialStores:             []string{"test"},
-		UseExportImportForRewrite: false, // Disable Export/Import to match RefHashes
+		Dir:             t.TempDir(),
+		CreateIfMissing: true,
+		InitialStores:   []string{"test"},
 	})
 	require.NoError(t, err)
+	// Disable Export/Import to match RefHashes (must set after OpenDB because FillDefaults overwrites it)
+	db.opts.UseExportImportForRewrite = false
 
 	for i, changes := range ChangeSets {
 		cs := []*proto.NamedChangeSet{
@@ -99,6 +100,8 @@ func TestRewriteSnapshotBackground(t *testing.T) {
 		SnapshotKeepRecent: 0, // only a single snapshot is kept
 	})
 	require.NoError(t, err)
+	// Disable Export/Import to match RefHashes (must set after OpenDB because FillDefaults overwrites it)
+	db.opts.UseExportImportForRewrite = false
 
 	// spin up goroutine to keep querying the tree
 	stopped := false

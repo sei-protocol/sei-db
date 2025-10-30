@@ -465,7 +465,7 @@ func (t *Tree) RewriteSnapshotViaExport(ctx context.Context, newDir string) erro
 	fmt.Printf("[IMPORT] Starting to import tree: %s\n", treeName)
 	importStart := time.Now()
 	
-	err := doImport(newDir, int64(t.version), nodeChan)
+	err := doImport(ctx, newDir, int64(t.version), nodeChan)
 	if err != nil {
 		return fmt.Errorf("import error: %w", err)
 	}
