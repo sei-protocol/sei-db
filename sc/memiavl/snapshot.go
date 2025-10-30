@@ -36,7 +36,46 @@ const (
 	FileNameLeaves   = "leaves"
 	FileNameKVs      = "kvs"
 	FileNameMetadata = "metadata"
+
+	// Drop cache every 512MB written to prevent page cache eviction
+	// More frequent drops = less write data in cache = more room for source snapshot
+	// Trade-off: More sync() calls vs keeping read cache hot
+	// With 81GB EVM tree: 512MB interval = ~160 drops vs 1GB = ~80 drops
+	// Goal: Keep write cache <10GB to preserve 90GB+ for source snapshot reads
+	cacheDropInterval = 512 * 1024 * 1024 // 512MB
 )
+
+// cacheDropWriter wraps an os.File and drops page cache after every write
+// This aggressively prevents write data from evicting source snapshot pages
+// Critical for maintaining 900-1200k nodes/s read speed throughout the process
+type cacheDropWriter struct {
+	f       *os.File
+	written int64
+}
+
+func (w *cacheDropWriter) Write(p []byte) (n int, err error) {
+	n, err = w.f.Write(p)
+	if err != nil {
+		return n, err
+	}
+
+	w.written += int64(n)
+
+	// Sync + drop cache after EVERY write from bufio.Writer
+	// bufio.Writer flushes when buffer (2GB) is full or manually flushed
+	// By dropping cache immediately, we prevent write data from accumulating
+	// Trade-off: More sync() calls, but keeps source snapshot in cache
+	if syncErr := w.f.Sync(); syncErr == nil {
+		dropPageCache(w.f)
+		// Only log every 5GB to reduce log spam
+		if w.written%(5*1024*1024*1024) < int64(n) {
+			fmt.Printf("[CACHE DROP] Dropped cache after writing %dGB total\n",
+				w.written/(1024*1024*1024))
+		}
+	}
+
+	return n, err
+}
 
 // Snapshot manage the lifecycle of mmap-ed files for the snapshot,
 // it must out live the objects that derived from it.
@@ -460,9 +499,16 @@ func writeSnapshotWithBuffer(
 		}
 	}()
 
-	nodesWriter := bufio.NewWriterSize(fpNodes, bufSize)
-	leavesWriter := bufio.NewWriterSize(fpLeaves, bufSize)
-	kvsWriter := bufio.NewWriterSize(fpKVs, bufSize)
+	// Wrap files with cache-dropping writers
+	// These will sync + drop cache after every bufio flush (every 2GB)
+	nodesDropWriter := &cacheDropWriter{f: fpNodes}
+	leavesDropWriter := &cacheDropWriter{f: fpLeaves}
+	kvsDropWriter := &cacheDropWriter{f: fpKVs}
+
+	// Create buffered writers with large buffers (2GB each for EVM tree)
+	nodesWriter := bufio.NewWriterSize(nodesDropWriter, bufSize)
+	leavesWriter := bufio.NewWriterSize(leavesDropWriter, bufSize)
+	kvsWriter := bufio.NewWriterSize(kvsDropWriter, bufSize)
 
 	w := newSnapshotWriter(ctx, nodesWriter, leavesWriter, kvsWriter)
 	w.treeName = filepath.Base(dir) // Set tree name for progress reporting
@@ -520,65 +566,45 @@ func writeSnapshotWithBuffer(
 
 	if leaves > 0 {
 		flushStart := time.Now()
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: starting to flush buffers...\n", treeName)
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: starting to flush and drop cache...\n", treeName)
+
+		// Flush + Sync + Drop cache for each file immediately
+		// This prevents write data from accumulating in page cache
 
 		if err := nodesWriter.Flush(); err != nil {
 			return err
 		}
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed nodes buffer in %.1fs\n",
-			treeName, time.Since(flushStart).Seconds())
-
-		flushLeavesStart := time.Now()
-		if err := leavesWriter.Flush(); err != nil {
-			return err
-		}
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed leaves buffer in %.1fs\n",
-			treeName, time.Since(flushLeavesStart).Seconds())
-
-		flushKvsStart := time.Now()
-		if err := kvsWriter.Flush(); err != nil {
-			return err
-		}
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed kvs buffer in %.1fs\n",
-			treeName, time.Since(flushKvsStart).Seconds())
-
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: all buffers flushed in %.1fs total\n",
-			treeName, time.Since(flushStart).Seconds())
-
-		syncStart := time.Now()
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: starting to sync files to disk...\n", treeName)
-
-		if err := fpKVs.Sync(); err != nil {
-			return err
-		}
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: synced kvs file in %.1fs\n",
-			treeName, time.Since(syncStart).Seconds())
-
-		syncLeavesStart := time.Now()
-		if err := fpLeaves.Sync(); err != nil {
-			return err
-		}
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: synced leaves file in %.1fs\n",
-			treeName, time.Since(syncLeavesStart).Seconds())
-
-		syncNodesStart := time.Now()
 		if err := fpNodes.Sync(); err != nil {
 			return err
 		}
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: synced nodes file in %.1fs\n",
-			treeName, time.Since(syncNodesStart).Seconds())
-
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: all files synced to disk in %.1fs total\n",
-			treeName, time.Since(syncStart).Seconds())
-
-		// Drop written pages from page cache to prevent evicting source snapshot pages
-		// This keeps the read-side (old snapshot) cache hit rate high
-		dropCacheStart := time.Now()
-		dropPageCache(fpKVs)
-		dropPageCache(fpLeaves)
 		dropPageCache(fpNodes)
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: dropped page cache in %.1fs\n",
-			treeName, time.Since(dropCacheStart).Seconds())
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced+dropped nodes in %.1fs\n",
+			treeName, time.Since(flushStart).Seconds())
+
+		leavesStart := time.Now()
+		if err := leavesWriter.Flush(); err != nil {
+			return err
+		}
+		if err := fpLeaves.Sync(); err != nil {
+			return err
+		}
+		dropPageCache(fpLeaves)
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced+dropped leaves in %.1fs\n",
+			treeName, time.Since(leavesStart).Seconds())
+
+		kvsStart := time.Now()
+		if err := kvsWriter.Flush(); err != nil {
+			return err
+		}
+		if err := fpKVs.Sync(); err != nil {
+			return err
+		}
+		dropPageCache(fpKVs)
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced+dropped kvs in %.1fs\n",
+			treeName, time.Since(kvsStart).Seconds())
+
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: all files flushed+synced+dropped in %.1fs total\n",
+			treeName, time.Since(flushStart).Seconds())
 	}
 
 	// write metadata
