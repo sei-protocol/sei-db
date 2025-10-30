@@ -20,9 +20,10 @@ import (
 
 func TestRewriteSnapshot(t *testing.T) {
 	db, err := OpenDB(logger.NewNopLogger(), 0, Options{
-		Dir:             t.TempDir(),
-		CreateIfMissing: true,
-		InitialStores:   []string{"test"},
+		Dir:                       t.TempDir(),
+		CreateIfMissing:           true,
+		InitialStores:             []string{"test"},
+		UseExportImportForRewrite: false, // Disable Export/Import to match RefHashes
 	})
 	require.NoError(t, err)
 

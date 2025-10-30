@@ -559,9 +559,22 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 	tmpDir := snapshotDir + "-tmp"
 	path := filepath.Join(db.dir, tmpDir)
 
-	// Choose write method based on configuration
+	// Choose write method based on configuration and snapshot availability
 	var err error
-	if db.opts.UseExportImportForRewrite {
+	useExportImport := db.opts.UseExportImportForRewrite
+
+	// Check if all trees have snapshots (required for Export/Import)
+	if useExportImport {
+		for _, entry := range db.MultiTree.trees {
+			if entry.Tree.snapshot == nil {
+				fmt.Printf("[REWRITE] Tree %s has no snapshot, falling back to recursive traversal\n", entry.Name)
+				useExportImport = false
+				break
+			}
+		}
+	}
+
+	if useExportImport {
 		// Use Export/Import approach (sequential I/O, 2-3x faster)
 		fmt.Printf("[REWRITE] Using Export/Import approach for snapshot rewrite\n")
 		err = db.MultiTree.WriteSnapshotViaExport(ctx, path, db.snapshotWriterPool)
@@ -620,8 +633,21 @@ func (db *DB) rewriteIfApplicable(height int64) {
 		return
 	}
 
+	snapshotVersion := db.SnapshotVersion()
+
+	// Add logging to debug the snapshot rewrite trigger logic
+	db.logger.Debug("checking snapshot rewrite condition",
+		"current_height", height,
+		"snapshot_version", snapshotVersion,
+		"interval", db.snapshotInterval,
+		"diff", height-snapshotVersion)
+
 	// create snapshot when current height - last snapshot height > interval
-	if height-db.SnapshotVersion() >= int64(db.snapshotInterval) {
+	if height-snapshotVersion >= int64(db.snapshotInterval) {
+		db.logger.Info("triggering snapshot rewrite",
+			"current_height", height,
+			"snapshot_version", snapshotVersion,
+			"interval", db.snapshotInterval)
 		if err := db.rewriteSnapshotBackground(); err != nil {
 			db.logger.Error("failed to rewrite snapshot in background", "err", err)
 		}
@@ -660,26 +686,12 @@ func (db *DB) rewriteSnapshotBackground() error {
 	go func() {
 		defer close(ch)
 		startTime := time.Now()
+		fmt.Printf("[SNAPSHOT REWRITE] Starting snapshot rewrite process for version %d\n", cloned.Version())
 		cloned.logger.Info("start rewriting snapshot", "version", cloned.Version())
 
-		// Prefetch old snapshot into page cache before rewriting
-		// This is critical for cold-start performance: converts 92min → 13min (7x faster)
-		// Use threshold=0 to force prefetch even if cache residency check says it's cached
-		// This is necessary because cache may have been evicted between LoadMultiTree and RewriteSnapshot
-		prefetchStart := time.Now()
-		snapshotDir := currentPath(cloned.dir)
-		forcePrefetch := 0.0 // Always prefetch for RewriteSnapshot
-		fmt.Printf("[PREFETCH] About to prefetch snapshot from: %s (forced, threshold: %.2f)\n", snapshotDir, forcePrefetch)
-		cloned.logger.Info("prefetching old snapshot before rewrite", "dir", snapshotDir, "threshold", forcePrefetch)
-		if err := cloned.MultiTree.PrefetchSnapshot(snapshotDir, forcePrefetch); err != nil {
-			fmt.Printf("[PREFETCH] Failed to prefetch snapshot: %v\n", err)
-			cloned.logger.Error("failed to prefetch snapshot", "error", err)
-			// Continue anyway - prefetch is best-effort optimization
-		} else {
-			prefetchElapsed := time.Since(prefetchStart).Seconds()
-			fmt.Printf("[PREFETCH] Finished prefetching snapshot in %.1fs\n", prefetchElapsed)
-			cloned.logger.Info("finished prefetching snapshot", "elapsed", prefetchElapsed)
-		}
+		// Note: We don't prefetch here anymore because WriteSnapshotViaExport
+		// does staged prefetching internally (EVM first, then bank+acc)
+		// This avoids redundant prefetch and prevents cache eviction
 
 		rewriteStart := time.Now()
 		if err := cloned.RewriteSnapshot(ctx); err != nil {
@@ -709,6 +721,7 @@ func (db *DB) rewriteSnapshotBackground() error {
 
 		ch <- snapshotResult{mtree: mtree}
 		totalElapsed := time.Since(startTime).Seconds()
+		fmt.Printf("[SNAPSHOT REWRITE] Snapshot rewrite process completed in %.1fs (%.1fmin)\n", totalElapsed, totalElapsed/60)
 		cloned.logger.Info("snapshot background process completed", "total_elapsed", totalElapsed)
 		metrics.SeiDBMetrics.SnapshotCreationLatency.Record(
 			context.Background(),
