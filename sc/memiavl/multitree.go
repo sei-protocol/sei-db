@@ -872,8 +872,8 @@ func (t *MultiTree) writeSnapshotParallelViaExport(ctx context.Context, dir stri
 // Uses staged prefetch to avoid cache eviction:
 //  1. Prefetch EVM only (81GB)
 //  2. Write EVM (with cache drop)
-//  3. Prefetch others (29GB)
-//  4. Write others in parallel
+//  3. Prefetch large trees only (bank+acc, 35GB) - small trees don't need prefetch
+//  4. Write all remaining trees in parallel
 func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir string, wp *pond.WorkerPool) error {
 	startTime := time.Now()
 
@@ -920,16 +920,28 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 		fmt.Printf("[EXPORT/IMPORT] Phase 2 completed: EVM tree written in %.1fs\n", evmElapsed)
 	}
 
-	// Phase 3: Prefetch other trees (29GB) - now that EVM is done
+	// Phase 3: Prefetch large trees ONLY (bank + acc = 35GB)
+	// Critical: Only prefetch large trees to avoid wasting time on small trees
+	// Small trees (<10M nodes) are fast enough without prefetch (100-120k nodes/s)
+	// Large trees (>100M nodes) need prefetch to maintain high speed (~1000k nodes/s)
 	var prefetch2Elapsed float64
-	if len(otherTrees) > 0 {
-		fmt.Printf("[PREFETCH] Phase 3: Prefetching %d remaining trees (29GB, 27%% of data)\n", len(otherTrees))
+	var largeTrees []NamedTree
+	for _, entry := range otherTrees {
+		// Only prefetch trees with >100M nodes (bank: 278M, acc: 155M)
+		// Skip small trees like wasm (27M), ibc (2.6M), etc.
+		if entry.Name == "bank" || entry.Name == "acc" {
+			largeTrees = append(largeTrees, entry)
+		}
+	}
+
+	if len(largeTrees) > 0 {
+		fmt.Printf("[PREFETCH] Phase 3: Prefetching %d large trees (bank+acc, 35GB, 25%% of data)\n", len(largeTrees))
 		prefetch2Start := time.Now()
 
 		prefetchGroup, _ := wp.GroupContext(ctx)
 		var prefetchCompleted int32
 
-		for _, entry := range otherTrees {
+		for _, entry := range largeTrees {
 			tree := entry.Tree
 			name := entry.Name
 			prefetchGroup.Submit(func() error {
@@ -938,8 +950,8 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 						fmt.Printf("[PREFETCH] Warning: prefetch failed for tree %s: %v\n", name, err)
 					} else {
 						current := atomic.AddInt32(&prefetchCompleted, 1)
-						fmt.Printf("[PREFETCH] Completed prefetch for tree %s (%d/%d trees)\n",
-							name, current, len(otherTrees))
+						fmt.Printf("[PREFETCH] Completed prefetch for tree %s (%d/%d large trees)\n",
+							name, current, len(largeTrees))
 					}
 				}
 				return nil
@@ -948,7 +960,7 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 
 		prefetchGroup.Wait()
 		prefetch2Elapsed = time.Since(prefetch2Start).Seconds()
-		fmt.Printf("[PREFETCH] Phase 3 completed: %d trees prefetched in %.1fs\n", len(otherTrees), prefetch2Elapsed)
+		fmt.Printf("[PREFETCH] Phase 3 completed: %d large trees prefetched in %.1fs\n", len(largeTrees), prefetch2Elapsed)
 	}
 
 	// Phase 4: Write other trees in parallel
@@ -985,7 +997,7 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 
 	elapsed := time.Since(startTime).Seconds()
 	fmt.Printf("[SNAPSHOT WRITE] All %d trees completed in %.1fs using Export/Import (Priority EVM)\n", len(t.trees), elapsed)
-	fmt.Printf("[SNAPSHOT WRITE] Time breakdown: Prefetch-EVM %.1fs + Write-EVM %.1fs + Prefetch-Others %.1fs + Write-Others %.1fs = Total %.1fs\n",
+	fmt.Printf("[SNAPSHOT WRITE] Time breakdown: Prefetch-EVM %.1fs + Write-EVM %.1fs + Prefetch-Large %.1fs + Write-All %.1fs = Total %.1fs\n",
 		prefetch1Elapsed, evmElapsed, prefetch2Elapsed, phase4Elapsed, elapsed)
 
 	// Write commit info
