@@ -869,47 +869,15 @@ func (t *MultiTree) writeSnapshotParallelViaExport(ctx context.Context, dir stri
 }
 
 // writeSnapshotPriorityEVMViaExport writes EVM tree first (serial), then others in parallel
-// This strategy avoids page cache eviction that occurs with full parallel writes
+// Uses staged prefetch to avoid cache eviction:
+//  1. Prefetch EVM only (81GB)
+//  2. Write EVM (with cache drop)
+//  3. Prefetch others (29GB)
+//  4. Write others in parallel
 func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir string, wp *pond.WorkerPool) error {
 	startTime := time.Now()
 
-	// Phase 1: Prefetch all snapshots in parallel
-	// This loads all snapshot files into page cache before export
-	fmt.Printf("[PREFETCH] Phase 1: Prefetching snapshots for %d trees in parallel\n", len(t.trees))
-	prefetchStart := time.Now()
-
-	prefetchGroup, _ := wp.GroupContext(ctx)
-	var prefetchCompleted int32
-
-	for _, entry := range t.trees {
-		tree := entry.Tree
-		name := entry.Name
-		prefetchGroup.Submit(func() error {
-			if tree.snapshot != nil {
-				treeStart := time.Now()
-				fmt.Printf("[PREFETCH] Starting prefetch for tree: %s\n", name)
-
-				if err := tree.snapshot.PrefetchFiles(); err != nil {
-					fmt.Printf("[PREFETCH] Warning: prefetch failed for tree %s: %v (continuing anyway)\n", name, err)
-				} else {
-					elapsed := time.Since(treeStart).Seconds()
-					current := atomic.AddInt32(&prefetchCompleted, 1)
-					fmt.Printf("[PREFETCH] Completed prefetch for tree %s in %.1fs (%d/%d trees)\n",
-						name, elapsed, current, len(t.trees))
-				}
-			}
-			return nil // Don't fail on prefetch errors
-		})
-	}
-
-	if err := prefetchGroup.Wait(); err != nil {
-		fmt.Printf("[PREFETCH] Warning: prefetch phase had errors: %v (continuing with export)\n", err)
-	}
-
-	prefetchElapsed := time.Since(prefetchStart).Seconds()
-	fmt.Printf("[PREFETCH] Phase 1 completed: All snapshots prefetched in %.1fs\n", prefetchElapsed)
-
-	// Find EVM tree
+	// Find EVM tree first
 	var evmTree *Tree
 	var evmName string
 	otherTrees := make([]NamedTree, 0, len(t.trees))
@@ -923,10 +891,25 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 		}
 	}
 
-	// Phase 2: Write EVM tree first (serial) - avoids cache eviction
+	// Phase 1: Prefetch EVM ONLY (81GB)
+	// Critical: Don't prefetch all trees at once to avoid cache eviction
+	var prefetch1Elapsed float64
+	if evmTree != nil && evmTree.snapshot != nil {
+		fmt.Printf("[PREFETCH] Phase 1: Prefetching EVM tree ONLY (81GB, 73%% of data)\n")
+		prefetch1Start := time.Now()
+
+		if err := evmTree.snapshot.PrefetchFiles(); err != nil {
+			fmt.Printf("[PREFETCH] Warning: EVM prefetch failed: %v (continuing anyway)\n", err)
+		}
+
+		prefetch1Elapsed = time.Since(prefetch1Start).Seconds()
+		fmt.Printf("[PREFETCH] Phase 1 completed: EVM prefetched in %.1fs\n", prefetch1Elapsed)
+	}
+
+	// Phase 2: Write EVM tree (serial) with cache drop
 	var evmElapsed float64
 	if evmTree != nil {
-		fmt.Printf("[EXPORT/IMPORT] Phase 2: Writing EVM tree first (serial, 73%% of data, avoids cache pressure)\n")
+		fmt.Printf("[EXPORT/IMPORT] Phase 2: Writing EVM tree (serial, cache drops prevent eviction)\n")
 		evmStart := time.Now()
 
 		if err := evmTree.RewriteSnapshotViaExport(ctx, filepath.Join(dir, evmName)); err != nil {
@@ -937,11 +920,42 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 		fmt.Printf("[EXPORT/IMPORT] Phase 2 completed: EVM tree written in %.1fs\n", evmElapsed)
 	}
 
-	// Phase 3: Write all other trees in parallel
-	var phase3Elapsed float64
+	// Phase 3: Prefetch other trees (29GB) - now that EVM is done
+	var prefetch2Elapsed float64
 	if len(otherTrees) > 0 {
-		fmt.Printf("[EXPORT/IMPORT] Phase 3: Writing %d remaining trees in parallel\n", len(otherTrees))
-		phase3Start := time.Now()
+		fmt.Printf("[PREFETCH] Phase 3: Prefetching %d remaining trees (29GB, 27%% of data)\n", len(otherTrees))
+		prefetch2Start := time.Now()
+
+		prefetchGroup, _ := wp.GroupContext(ctx)
+		var prefetchCompleted int32
+
+		for _, entry := range otherTrees {
+			tree := entry.Tree
+			name := entry.Name
+			prefetchGroup.Submit(func() error {
+				if tree.snapshot != nil {
+					if err := tree.snapshot.PrefetchFiles(); err != nil {
+						fmt.Printf("[PREFETCH] Warning: prefetch failed for tree %s: %v\n", name, err)
+					} else {
+						current := atomic.AddInt32(&prefetchCompleted, 1)
+						fmt.Printf("[PREFETCH] Completed prefetch for tree %s (%d/%d trees)\n",
+							name, current, len(otherTrees))
+					}
+				}
+				return nil
+			})
+		}
+
+		prefetchGroup.Wait()
+		prefetch2Elapsed = time.Since(prefetch2Start).Seconds()
+		fmt.Printf("[PREFETCH] Phase 3 completed: %d trees prefetched in %.1fs\n", len(otherTrees), prefetch2Elapsed)
+	}
+
+	// Phase 4: Write other trees in parallel
+	var phase4Elapsed float64
+	if len(otherTrees) > 0 {
+		fmt.Printf("[EXPORT/IMPORT] Phase 4: Writing %d remaining trees in parallel\n", len(otherTrees))
+		phase4Start := time.Now()
 
 		group, _ := wp.GroupContext(ctx)
 		var completed int32
@@ -965,14 +979,14 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 			return err
 		}
 
-		phase3Elapsed = time.Since(phase3Start).Seconds()
-		fmt.Printf("[EXPORT/IMPORT] Phase 3 completed: %d trees written in %.1fs\n", len(otherTrees), phase3Elapsed)
+		phase4Elapsed = time.Since(phase4Start).Seconds()
+		fmt.Printf("[EXPORT/IMPORT] Phase 4 completed: %d trees written in %.1fs\n", len(otherTrees), phase4Elapsed)
 	}
 
 	elapsed := time.Since(startTime).Seconds()
 	fmt.Printf("[SNAPSHOT WRITE] All %d trees completed in %.1fs using Export/Import (Priority EVM)\n", len(t.trees), elapsed)
-	fmt.Printf("[SNAPSHOT WRITE] Time breakdown: Prefetch %.1fs + EVM %.1fs + Others %.1fs = Total %.1fs\n",
-		prefetchElapsed, evmElapsed, phase3Elapsed, elapsed)
+	fmt.Printf("[SNAPSHOT WRITE] Time breakdown: Prefetch-EVM %.1fs + Write-EVM %.1fs + Prefetch-Others %.1fs + Write-Others %.1fs = Total %.1fs\n",
+		prefetch1Elapsed, evmElapsed, prefetch2Elapsed, phase4Elapsed, elapsed)
 
 	// Write commit info
 	fmt.Printf("[SNAPSHOT WRITE] Writing metadata file\n")

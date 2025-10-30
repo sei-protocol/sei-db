@@ -62,15 +62,16 @@ func (w *cacheDropWriter) Write(p []byte) (n int, err error) {
 	w.written += int64(n)
 
 	// Sync + drop cache after EVERY write from bufio.Writer
-	// bufio.Writer flushes when buffer (2GB) is full or manually flushed
+	// bufio.Writer flushes when buffer (256MB) is full or manually flushed
 	// By dropping cache immediately, we prevent write data from accumulating
 	// Trade-off: More sync() calls, but keeps source snapshot in cache
 	if syncErr := w.f.Sync(); syncErr == nil {
 		dropPageCache(w.f)
-		// Only log every 5GB to reduce log spam
-		if w.written%(5*1024*1024*1024) < int64(n) {
-			fmt.Printf("[CACHE DROP] Dropped cache after writing %dGB total\n",
-				w.written/(1024*1024*1024))
+		// Log every 1GB to monitor cache dropping frequency
+		// With 256MB buffer: expect ~4 drops per GB per file
+		if w.written%(1024*1024*1024) < int64(n) {
+			fmt.Printf("[CACHE DROP] File %s: dropped cache at %dGB total\n",
+				w.f.Name(), w.written/(1024*1024*1024))
 		}
 	}
 

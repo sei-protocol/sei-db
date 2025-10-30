@@ -25,16 +25,14 @@ var (
 	// For EVM tree (81GB), this reduces flush count from 633 to 316
 	bufIOSize = 256 * 1024 * 1024
 
-	// Extra large buffer for very large trees (like EVM)
-	// Used when tree size > 50GB to further reduce flush overhead
-	// Analysis shows:
-	//   - 256MB buffer: frequent auto-flush blocks writer goroutines → channel fills → traversal blocks → 66k nodes/s
-	//   - 2GB buffer: rare auto-flush, writers keep up with traversal → stable 270k nodes/s
-	// Root cause: bufio.Writer.Write() blocks when buffer is full during flush
-	// Trade-off: 6GB memory (3 files × 2GB) for 4x better performance
-	// Note: Real bottleneck is disk (1800 read IOPS, 100% util) not memory
-	// TODO: Consider Export/Import approach for sequential I/O instead of recursive traversal
-	bufIOSizeLarge = 2 * 1024 * 1024 * 1024 // 2GB
+	// Buffer size for large trees with aggressive cache dropping
+	// Smaller buffer = more frequent flush = more frequent cache drop
+	// Trade-off analysis:
+	//   - 2GB buffer: rare flush (every 2GB) → write data accumulates in cache → read speed degrades
+	//   - 256MB buffer: frequent flush (every 256MB) → immediate cache drop → read speed stays high
+	// With cacheDropWriter: smaller is better for maintaining read cache
+	// 256MB × 3 files = 768MB memory, acceptable trade-off for 4x read speed
+	bufIOSizeLarge = 256 * 1024 * 1024 // 256MB
 )
 
 type MultiTreeImporter struct {
