@@ -36,21 +36,15 @@ const (
 	FileNameLeaves   = "leaves"
 	FileNameKVs      = "kvs"
 	FileNameMetadata = "metadata"
-
-	// Drop cache every 512MB written to prevent page cache eviction
-	// More frequent drops = less write data in cache = more room for source snapshot
-	// Trade-off: More sync() calls vs keeping read cache hot
-	// With 81GB EVM tree: 512MB interval = ~160 drops vs 1GB = ~80 drops
-	// Goal: Keep write cache <10GB to preserve 90GB+ for source snapshot reads
-	cacheDropInterval = 512 * 1024 * 1024 // 512MB
 )
 
 // cacheDropWriter wraps an os.File and drops page cache after every write
 // This aggressively prevents write data from evicting source snapshot pages
 // Critical for maintaining 900-1200k nodes/s read speed throughout the process
 type cacheDropWriter struct {
-	f       *os.File
-	written int64
+	f          *os.File
+	written    int64
+	lastDropAt int64 // Track where we last dropped cache
 }
 
 func (w *cacheDropWriter) Write(p []byte) (n int, err error) {
@@ -61,19 +55,18 @@ func (w *cacheDropWriter) Write(p []byte) (n int, err error) {
 
 	w.written += int64(n)
 
-	// Sync + drop cache after EVERY write from bufio.Writer
-	// bufio.Writer flushes when buffer (16MB) is full or manually flushed
-	// By dropping cache immediately, we prevent write data from accumulating
-	// Trade-off: More sync() calls, but keeps source snapshot in cache
-	if syncErr := w.f.Sync(); syncErr == nil {
-		dropPageCache(w.f)
-		// Log every 256MB to monitor cache dropping frequency
-		// With 16MB buffer: expect ~16 drops per GB per file
-		// This helps verify cache is being dropped aggressively enough
-		if w.written%(256*1024*1024) < int64(n) {
-			fmt.Printf("[CACHE DROP] File %s: dropped cache at %dMB total\n",
-				w.f.Name(), w.written/(1024*1024))
-		}
+	// Drop cache for the range we just wrote (incremental drop)
+	// Only drop the newly written portion, not the entire file
+	// This is much faster than dropping entire 80GB file each time
+	dropPageCacheRange(w.f, w.lastDropAt, w.written)
+	w.lastDropAt = w.written
+
+	// Log every 256MB to monitor cache dropping frequency
+	// With 16MB buffer: expect ~16 drops per GB per file
+	// This helps verify cache is being dropped aggressively enough
+	if w.written%(256*1024*1024) < int64(n) {
+		fmt.Printf("[CACHE DROP] File %s: dropped cache at %dMB total\n",
+			w.f.Name(), w.written/(1024*1024))
 	}
 
 	return n, err

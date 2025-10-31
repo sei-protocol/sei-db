@@ -556,6 +556,14 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 	}
 
 	snapshotDir := snapshotName(db.lastCommitInfo.Version)
+
+	// Check if snapshot already exists - if so, skip rewrite to avoid corrupting active snapshot
+	targetPath := filepath.Join(db.dir, snapshotDir)
+	if _, err := os.Stat(targetPath); err == nil {
+		db.logger.Info("snapshot already exists, skipping rewrite", "snapshot", snapshotDir)
+		return nil
+	}
+
 	tmpDir := snapshotDir + "-tmp"
 	path := filepath.Join(db.dir, tmpDir)
 
@@ -588,13 +596,7 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 		return errorutils.Join(err, os.RemoveAll(path))
 	}
 
-	// Remove old snapshot directory if it exists (for rewriting existing snapshots)
-	targetPath := filepath.Join(db.dir, snapshotDir)
-	if err := os.RemoveAll(targetPath); err != nil && !os.IsNotExist(err) {
-		return errorutils.Join(err, os.RemoveAll(path))
-	}
-
-	if err := os.Rename(path, targetPath); err != nil {
+	if err := os.Rename(path, filepath.Join(db.dir, snapshotDir)); err != nil {
 		return err
 	}
 	return updateCurrentSymlink(db.dir, snapshotDir)

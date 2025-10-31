@@ -40,6 +40,30 @@ func dropPageCache(f *os.File) {
 	// Ignore errors - this is just a hint to the kernel
 }
 
+// dropPageCacheRange tells the OS to drop a specific range of pages from cache
+// This is more efficient than dropping entire file when doing incremental writes
+// Only drops the newly written portion, avoiding expensive fadvise on entire 80GB file
+func dropPageCacheRange(f *os.File, offset, end int64) {
+	if f == nil || offset >= end {
+		return
+	}
+
+	fd := int(f.Fd())
+	const POSIX_FADV_DONTNEED = 4
+
+	// Call fadvise64 for just the range we wrote
+	length := end - offset
+	_, _, _ = syscall.Syscall6(
+		syscall.SYS_FADVISE64,
+		uintptr(fd),
+		uintptr(offset),            // start offset
+		uintptr(length),            // length of range to drop
+		POSIX_FADV_DONTNEED,        // advice
+		0, 0,
+	)
+	// Ignore errors - this is just a hint to the kernel
+}
+
 // touchPageCache tells the OS to keep the file's pages in cache with high priority
 // This prevents eviction by other processes (e.g., PebbleDB RPC reads)
 // Critical for maintaining stable Export performance when RPC is active

@@ -891,8 +891,33 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 		}
 	}
 
+	// Phase 0: Drop non-EVM trees' page cache
+	// Critical: Cold start loads all trees with MADV_WILLNEED, leaving bank/acc in cache (~25GB residual)
+	// This residual cache competes with EVM prefetch and can cause cache eviction
+	// By dropping non-EVM cache first, we ensure EVM has full access to page cache
+	fmt.Printf("[CACHE DROP] Phase 0: Dropping page cache for non-EVM trees (bank: 14.6GB, acc: 8GB)\n")
+	phase0Start := time.Now()
+	droppedCount := 0
+	for _, entry := range otherTrees {
+		if entry.Tree.snapshot != nil {
+			// Drop cache for all snapshot files (nodes, leaves, kvs)
+			if entry.Tree.snapshot.nodesMap != nil && entry.Tree.snapshot.nodesMap.file != nil {
+				dropPageCache(entry.Tree.snapshot.nodesMap.file)
+			}
+			if entry.Tree.snapshot.leavesMap != nil && entry.Tree.snapshot.leavesMap.file != nil {
+				dropPageCache(entry.Tree.snapshot.leavesMap.file)
+			}
+			if entry.Tree.snapshot.kvsMap != nil && entry.Tree.snapshot.kvsMap.file != nil {
+				dropPageCache(entry.Tree.snapshot.kvsMap.file)
+			}
+			droppedCount++
+		}
+	}
+	phase0Elapsed := time.Since(phase0Start).Seconds()
+	fmt.Printf("[CACHE DROP] Phase 0 completed: Dropped cache for %d trees in %.1fs\n", droppedCount, phase0Elapsed)
+
 	// Phase 1: Prefetch EVM ONLY (81GB)
-	// Critical: Don't prefetch all trees at once to avoid cache eviction
+	// Now that non-EVM cache is dropped, EVM has full page cache available (~110GB free in 128GB system)
 	var prefetch1Elapsed float64
 	if evmTree != nil && evmTree.snapshot != nil {
 		fmt.Printf("[PREFETCH] Phase 1: Prefetching EVM tree ONLY (81GB, 73%% of data)\n")
@@ -903,22 +928,7 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 		}
 
 		prefetch1Elapsed = time.Since(prefetch1Start).Seconds()
-		fmt.Printf("[PREFETCH] Phase 1 completed: EVM prefetched in %.1fs\n", prefetch1Elapsed)
-
-		// Phase 1.5: Re-prefetch EVM to ensure 100% cache hit
-		// Critical: First prefetch may have been partially evicted by bank/acc cache (35GB residual)
-		// Second prefetch triggers LRU eviction of bank/acc, ensuring EVM is fully in cache
-		// With 128GB RAM and 81GB EVM, we should achieve 100% cache hit rate
-		fmt.Printf("[PREFETCH] Phase 1.5: Re-prefetching EVM to ensure 100%% cache hit (evict bank/acc residual)\n")
-		reprefetchStart := time.Now()
-
-		if err := evmTree.snapshot.PrefetchFiles(); err != nil {
-			fmt.Printf("[PREFETCH] Warning: EVM re-prefetch failed: %v (continuing anyway)\n", err)
-		}
-
-		reprefetchElapsed := time.Since(reprefetchStart).Seconds()
-		fmt.Printf("[PREFETCH] Phase 1.5 completed: EVM re-prefetched in %.1fs\n", reprefetchElapsed)
-		prefetch1Elapsed += reprefetchElapsed // Include re-prefetch time in total
+		fmt.Printf("[PREFETCH] Phase 1 completed: EVM prefetched in %.1fs (should achieve ~100%% cache hit)\n", prefetch1Elapsed)
 	}
 
 	// Phase 2: Write EVM tree (serial) with cache drop
@@ -1027,8 +1037,8 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 
 	elapsed := time.Since(startTime).Seconds()
 	fmt.Printf("[SNAPSHOT WRITE] All %d trees completed in %.1fs using Export/Import (Priority EVM)\n", len(t.trees), elapsed)
-	fmt.Printf("[SNAPSHOT WRITE] Time breakdown: Prefetch-EVM(x2) %.1fs + Write-EVM %.1fs + Prefetch-Large %.1fs + Write-All %.1fs = Total %.1fs\n",
-		prefetch1Elapsed, evmElapsed, prefetch2Elapsed, phase4Elapsed, elapsed)
+	fmt.Printf("[SNAPSHOT WRITE] Time breakdown: DropCache %.1fs + Prefetch-EVM %.1fs + Write-EVM %.1fs + Prefetch-Large %.1fs + Write-All %.1fs = Total %.1fs\n",
+		phase0Elapsed, prefetch1Elapsed, evmElapsed, prefetch2Elapsed, phase4Elapsed, elapsed)
 
 	// Write commit info
 	fmt.Printf("[SNAPSHOT WRITE] Writing metadata file\n")
