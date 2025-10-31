@@ -67,6 +67,9 @@ type DB struct {
 	snapshotInterval uint32
 	// make sure only one snapshot rewrite is running
 	pruneSnapshotLock sync.Mutex
+	// isBackgroundClone indicates if this DB is a cloned copy for background snapshot rewrite
+	// When true, snapshot rewrite will disable prefetch to avoid cache interference with main chain
+	isBackgroundClone bool
 
 	// the changelog stream persists all the changesets
 	streamHandler types.Stream[proto.ChangelogEntry]
@@ -543,6 +546,7 @@ func (db *DB) copy() *DB {
 		dir:                db.dir,
 		snapshotWriterPool: db.snapshotWriterPool,
 		opts:               db.opts,
+		isBackgroundClone:  true, // Mark as background clone to disable prefetch
 	}
 }
 
@@ -584,8 +588,23 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 
 	if useExportImport {
 		// Use Export/Import approach (sequential I/O, 2-3x faster)
-		fmt.Printf("[REWRITE] Using Export/Import approach for snapshot rewrite\n")
-		err = db.MultiTree.WriteSnapshotViaExport(ctx, path, db.snapshotWriterPool)
+		// In production, this is always called from background rewrite (main chain running)
+		// In tests, it may be called directly (no main chain)
+		// Disable prefetch and cache drop during background rewrite to avoid cache interference
+		disablePrefetch := db.isBackgroundClone
+
+		// Add flag to context to disable cache drop during background rewrite
+		type contextKey string
+		if disablePrefetch {
+			// Production mode: background rewrite while main chain is running
+			ctx = context.WithValue(ctx, contextKey("disableCacheDrop"), true)
+			fmt.Printf("[REWRITE] Using Export/Import (background mode: prefetch+cache-drop disabled)\n")
+		} else {
+			// Test mode: direct call, no main chain running
+			fmt.Printf("[REWRITE] Using Export/Import (test mode: prefetch+cache-drop enabled)\n")
+		}
+
+		err = db.MultiTree.WriteSnapshotViaExport(ctx, path, db.snapshotWriterPool, disablePrefetch)
 	} else {
 		// Use traditional recursive traversal (random I/O)
 		fmt.Printf("[REWRITE] Using recursive traversal approach for snapshot rewrite\n")
@@ -691,10 +710,6 @@ func (db *DB) rewriteSnapshotBackground() error {
 		fmt.Printf("[SNAPSHOT REWRITE] Starting snapshot rewrite process for version %d\n", cloned.Version())
 		cloned.logger.Info("start rewriting snapshot", "version", cloned.Version())
 
-		// Note: We don't prefetch here anymore because WriteSnapshotViaExport
-		// does staged prefetching internally (EVM first, then bank+acc)
-		// This avoids redundant prefetch and prevents cache eviction
-
 		rewriteStart := time.Now()
 		if err := cloned.RewriteSnapshot(ctx); err != nil {
 			cloned.logger.Error("failed to rewrite snapshot", "error", err, "elapsed", time.Since(rewriteStart).Seconds())
@@ -704,7 +719,12 @@ func (db *DB) rewriteSnapshotBackground() error {
 		cloned.logger.Info("finished rewriting snapshot", "version", cloned.Version(), "elapsed", time.Since(rewriteStart).Seconds())
 
 		loadStart := time.Now()
-		mtree, err := LoadMultiTree(currentPath(cloned.dir), db.opts)
+		// Create opts for background load with prefetch disabled
+		// Background rewrite should not trigger prefetch to avoid cache interference with main chain
+		// The main chain is actively using the old snapshot, prefetch would evict hot pages
+		loadOpts := db.opts
+		loadOpts.PrefetchThreshold = 0 // Disable prefetch - new snapshot already in cache from rewrite
+		mtree, err := LoadMultiTree(currentPath(cloned.dir), loadOpts)
 		if err != nil {
 			cloned.logger.Error("failed to load multitree after snapshot", "error", err)
 			ch <- snapshotResult{err: err}

@@ -78,7 +78,10 @@ func (opts *Options) FillDefaults() {
 	opts.Logger = logger.NewNopLogger()
 	opts.SnapshotKeepRecent = config.DefaultSnapshotKeepRecent
 
-	// Enable Export/Import by default for better performance (2-3x faster)
-	// Uses sequential I/O instead of random access
+	// Enable Export/Import for significantly faster snapshot rewriting (2-3x faster)
+	// Fixed: RewriteSnapshotViaExport now uses t.Export() instead of t.snapshot.Export()
+	// t.Export() automatically handles MemNodes correctly:
+	//   - If tree.version != snapshot.version: uses ScanPostOrder (traverses MemNodes)
+	//   - If tree.version == snapshot.version: uses snapshot.Export() (fast sequential I/O)
 	opts.UseExportImportForRewrite = true
 }

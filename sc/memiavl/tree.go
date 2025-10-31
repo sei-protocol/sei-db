@@ -390,6 +390,7 @@ func (t *Tree) GetProof(key []byte) *ics23.CommitmentProof {
 //   - nodes file: sequential read (i++)
 //   - leaves file: sequential read (j++)
 //   - kvs file: mostly sequential (ordered offsets)
+//
 // This results in much better disk utilization and cache efficiency.
 func (t *Tree) RewriteSnapshotViaExport(ctx context.Context, newDir string) error {
 	t.mtx.RLock()
@@ -402,11 +403,14 @@ func (t *Tree) RewriteSnapshotViaExport(ctx context.Context, newDir string) erro
 
 	treeName := filepath.Base(newDir)
 	startTime := time.Now()
-	
+
 	fmt.Printf("[EXPORT] Starting to export tree: %s (version: %d)\n", treeName, t.version)
 
-	// Create exporter
-	exporter := t.snapshot.Export()
+	// Create exporter - use t.Export() to handle MemNodes correctly
+	// t.Export() will check if tree.version == snapshot.version
+	// If they differ (MemNodes exist), it uses ScanPostOrder to traverse the tree
+	// If they match (no MemNodes), it uses fast snapshot.Export()
+	exporter := t.Export()
 	defer exporter.Close()
 
 	// Create channel for streaming nodes
@@ -421,7 +425,7 @@ func (t *Tree) RewriteSnapshotViaExport(ctx context.Context, newDir string) erro
 		lastReport := time.Now()
 		lastReportCount := 0
 		totalNodes := t.snapshot.nodesLen() + t.snapshot.leavesLen() // Total nodes (branches + leaves)
-		
+
 		for {
 			node, err := exporter.Next()
 			if err != nil {
@@ -437,17 +441,17 @@ func (t *Tree) RewriteSnapshotViaExport(ctx context.Context, newDir string) erro
 			}
 
 			nodeCount++
-			
+
 			// Progress reporting every 30 seconds
 			if time.Since(lastReport) >= 30*time.Second {
 				elapsed := time.Since(lastReport).Seconds()
 				nodesInPeriod := nodeCount - lastReportCount
 				rate := float64(nodesInPeriod) / elapsed
 				progress := float64(nodeCount) * 100.0 / float64(totalNodes)
-				
+
 				fmt.Printf("[EXPORT] Tree %s: %d/%d nodes (%.1f%%) - %.0fk nodes/s in last 30s\n",
 					treeName, nodeCount, totalNodes, progress, rate/1000)
-				
+
 				lastReport = time.Now()
 				lastReportCount = nodeCount
 			}
@@ -464,7 +468,7 @@ func (t *Tree) RewriteSnapshotViaExport(ctx context.Context, newDir string) erro
 	// Import nodes to new snapshot
 	fmt.Printf("[IMPORT] Starting to import tree: %s\n", treeName)
 	importStart := time.Now()
-	
+
 	err := doImport(ctx, newDir, int64(t.version), nodeChan)
 	if err != nil {
 		return fmt.Errorf("import error: %w", err)
@@ -472,7 +476,7 @@ func (t *Tree) RewriteSnapshotViaExport(ctx context.Context, newDir string) erro
 
 	importElapsed := time.Since(importStart).Seconds()
 	totalElapsed := time.Since(startTime).Seconds()
-	
+
 	fmt.Printf("[IMPORT] Tree %s: import completed in %.1fs\n", treeName, importElapsed)
 	fmt.Printf("[EXPORT/IMPORT] Tree %s: total time %.1fs (export+import)\n", treeName, totalElapsed)
 

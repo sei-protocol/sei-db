@@ -42,9 +42,10 @@ const (
 // This aggressively prevents write data from evicting source snapshot pages
 // Critical for maintaining 900-1200k nodes/s read speed throughout the process
 type cacheDropWriter struct {
-	f          *os.File
-	written    int64
-	lastDropAt int64 // Track where we last dropped cache
+	f           *os.File
+	written     int64
+	lastDropAt  int64 // Track where we last dropped cache
+	disableDrop bool  // True during background rewrite (main chain running)
 }
 
 func (w *cacheDropWriter) Write(p []byte) (n int, err error) {
@@ -55,18 +56,17 @@ func (w *cacheDropWriter) Write(p []byte) (n int, err error) {
 
 	w.written += int64(n)
 
-	// Drop cache for the range we just wrote (incremental drop)
-	// Only drop the newly written portion, not the entire file
-	// This is much faster than dropping entire 80GB file each time
-	dropPageCacheRange(w.f, w.lastDropAt, w.written)
-	w.lastDropAt = w.written
+	// Always drop cache immediately after write (following 189e1ee logic that worked)
+	// This is more aggressive than threshold-based dropping but proven to work reliably
+	if !w.disableDrop {
+		dropPageCacheRange(w.f, w.lastDropAt, w.written)
+		w.lastDropAt = w.written
 
-	// Log every 256MB to monitor cache dropping frequency
-	// With 16MB buffer: expect ~16 drops per GB per file
-	// This helps verify cache is being dropped aggressively enough
-	if w.written%(256*1024*1024) < int64(n) {
-		fmt.Printf("[CACHE DROP] File %s: dropped cache at %dMB total\n",
-			w.f.Name(), w.written/(1024*1024))
+		// Log every 256MB to monitor progress
+		if w.written%(256*1024*1024) < int64(n) {
+			fmt.Printf("[CACHE DROP] File %s: dropped cache at %dMB total\n",
+				w.f.Name(), w.written/(1024*1024))
+		}
 	}
 
 	return n, err
@@ -495,10 +495,22 @@ func writeSnapshotWithBuffer(
 	}()
 
 	// Wrap files with cache-dropping writers
-	// These will sync + drop cache after every bufio flush (every 2GB)
-	nodesDropWriter := &cacheDropWriter{f: fpNodes}
-	leavesDropWriter := &cacheDropWriter{f: fpLeaves}
-	kvsDropWriter := &cacheDropWriter{f: fpKVs}
+	// Check if we should disable cache drop (during background rewrite with main chain running)
+	type contextKey string
+	disableDrop := ctx.Value(contextKey("disableCacheDrop")) == true
+
+	nodesDropWriter := &cacheDropWriter{
+		f:           fpNodes,
+		disableDrop: disableDrop,
+	}
+	leavesDropWriter := &cacheDropWriter{
+		f:           fpLeaves,
+		disableDrop: disableDrop,
+	}
+	kvsDropWriter := &cacheDropWriter{
+		f:           fpKVs,
+		disableDrop: disableDrop,
+	}
 
 	// Create buffered writers with large buffers (2GB each for EVM tree)
 	nodesWriter := bufio.NewWriterSize(nodesDropWriter, bufSize)
@@ -565,6 +577,10 @@ func writeSnapshotWithBuffer(
 
 		// Flush + Sync + Drop cache for each file immediately
 		// This prevents write data from accumulating in page cache
+		// NOTE: We always drop cache here (even in background mode) to:
+		// 1. Avoid cache overflow (new 81GB EVM could evict old snapshots)
+		// 2. Keep cache available for reading old snapshots during Phase 4
+		// The LoadMultiTree uses mmap (doesn't need data in cache) + prefetch disabled
 
 		if err := nodesWriter.Flush(); err != nil {
 			return err
@@ -1155,6 +1171,138 @@ func (snapshot *Snapshot) PrefetchFiles() error {
 	}
 
 	return nil
+}
+
+// StreamingPrefetch implements incremental chunk-based prefetch
+// Instead of prefetching all 80GB at once, prefetch in chunks (e.g., 8GB at a time)
+// This reduces memory pressure to ~8-16GB instead of 80GB+ and ensures 100% cache hit
+//
+// Algorithm:
+//  1. Prefetch first chunk (e.g., 10% = 8GB) synchronously
+//  2. Start background goroutine that prefetches next chunk every N seconds
+//  3. Export reads from cache while next chunk is being prefetched
+//  4. Total memory: 2 chunks in cache (current + next) = 16GB max
+//
+// Parameters:
+//   - chunkPercent: percentage of total size per chunk (e.g., 10 = 10%)
+//   - intervalSec: seconds between prefetch rounds (e.g., 60 = prefetch every minute)
+func (snapshot *Snapshot) StreamingPrefetch(ctx context.Context, chunkPercent int, intervalSec int) {
+	if snapshot.nodesMap == nil || snapshot.leavesMap == nil || snapshot.kvsMap == nil {
+		return
+	}
+
+	files := []*os.File{
+		snapshot.nodesMap.file,
+		snapshot.leavesMap.file,
+		snapshot.kvsMap.file,
+	}
+
+	// Calculate file sizes and total
+	var fileSizes []int64
+	var totalSize int64
+	for _, f := range files {
+		if fi, err := f.Stat(); err == nil {
+			size := fi.Size()
+			fileSizes = append(fileSizes, size)
+			totalSize += size
+		} else {
+			fileSizes = append(fileSizes, 0)
+		}
+	}
+
+	if totalSize == 0 {
+		return
+	}
+
+	chunkSize := totalSize * int64(chunkPercent) / 100
+	numChunks := (totalSize + chunkSize - 1) / chunkSize
+
+	fmt.Printf("[STREAMING PREFETCH] Total size: %.1f GB, chunk size: %.1f GB (%d%%), num chunks: %d\n",
+		float64(totalSize)/(1024*1024*1024),
+		float64(chunkSize)/(1024*1024*1024),
+		chunkPercent,
+		numChunks)
+
+	// Prefetch first chunk synchronously
+	prefetchChunk(files, fileSizes, totalSize, 0, chunkSize)
+
+	// Start background prefetcher for remaining chunks
+	go func() {
+		ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
+		defer ticker.Stop()
+
+		currentChunk := int64(1)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if currentChunk >= numChunks {
+					fmt.Printf("[STREAMING PREFETCH] All %d chunks prefetched\n", numChunks)
+					return
+				}
+
+				startOffset := currentChunk * chunkSize
+				endOffset := startOffset + chunkSize
+				if endOffset > totalSize {
+					endOffset = totalSize
+				}
+
+				prefetchChunk(files, fileSizes, totalSize, startOffset, endOffset-startOffset)
+				currentChunk++
+			}
+		}
+	}()
+}
+
+// prefetchChunk prefetches a specific chunk range across all files proportionally
+func prefetchChunk(files []*os.File, fileSizes []int64, totalSize int64, startOffset int64, length int64) {
+	if length <= 0 {
+		return
+	}
+
+	endOffset := startOffset + length
+	if endOffset > totalSize {
+		endOffset = totalSize
+	}
+
+	fmt.Printf("[STREAMING PREFETCH] Prefetching chunk: %.1f%% - %.1f%% (%.1f GB - %.1f GB)\n",
+		float64(startOffset)*100/float64(totalSize),
+		float64(endOffset)*100/float64(totalSize),
+		float64(startOffset)/(1024*1024*1024),
+		float64(endOffset)/(1024*1024*1024))
+
+	// Prefetch range from each file proportionally
+	var currentPos int64
+	for i, f := range files {
+		if f == nil || fileSizes[i] == 0 {
+			continue
+		}
+
+		nextPos := currentPos + fileSizes[i]
+
+		// Calculate overlap between [currentPos, nextPos] and [startOffset, endOffset]
+		fileStart := int64(0)
+		if startOffset > currentPos {
+			fileStart = startOffset - currentPos
+		}
+
+		fileEnd := fileSizes[i]
+		if endOffset < nextPos {
+			fileEnd = endOffset - currentPos
+		}
+
+		if fileStart < fileEnd {
+			prefetchFileRange(f, fileStart, fileEnd)
+			fmt.Printf("[STREAMING PREFETCH] File %s: prefetched %.1f GB (offset %.1f GB - %.1f GB)\n",
+				f.Name(),
+				float64(fileEnd-fileStart)/(1024*1024*1024),
+				float64(fileStart)/(1024*1024*1024),
+				float64(fileEnd)/(1024*1024*1024))
+		}
+
+		currentPos = nextPos
+	}
 }
 
 // KeepInCache periodically touches the snapshot files to keep them in page cache

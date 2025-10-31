@@ -5,6 +5,7 @@ package memiavl
 
 import (
 	"os"
+	"path/filepath"
 	"syscall"
 )
 
@@ -95,4 +96,44 @@ func touchPageCache(f *os.File) {
 		0, 0,
 	)
 	// Ignore errors - this is just a hint to the kernel
+}
+
+// prefetchFileRange tells the OS to asynchronously read a specific range into page cache
+// This is used for streaming/incremental prefetch - only prefetch what you need next
+// Much more memory-efficient than prefetching entire 80GB file
+func prefetchFileRange(f *os.File, offset, end int64) {
+	if f == nil || offset >= end {
+		return
+	}
+
+	fd := int(f.Fd())
+	const POSIX_FADV_WILLNEED = 3
+
+	length := end - offset
+	_, _, _ = syscall.Syscall6(
+		syscall.SYS_FADVISE64,
+		uintptr(fd),
+		uintptr(offset),     // start offset
+		uintptr(length),     // length to prefetch
+		POSIX_FADV_WILLNEED, // advice - async read into cache
+		0, 0,
+	)
+	// Ignore errors - this is just a hint to the kernel
+}
+
+// dropDirectoryPageCache drops page cache for all files in a directory recursively
+// This is used to evict PebbleDB cache which can grow to 20-30GB and evict our source snapshot
+func dropDirectoryPageCache(dir string) {
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+
+		// Open file and drop its cache
+		if f, err := os.Open(path); err == nil {
+			dropPageCache(f)
+			f.Close()
+		}
+		return nil
+	})
 }

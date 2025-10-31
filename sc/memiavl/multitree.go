@@ -746,6 +746,10 @@ func readMetadata(dir string) (*proto.MultiTreeMetadata, error) {
 // WriteSnapshotViaExport writes snapshot using Export/Import approach
 // This is significantly faster than recursive traversal because it uses sequential I/O.
 //
+// disablePrefetch: Set to true during background rewrite (main chain running) to avoid cache interference.
+//
+//	Set to false for cold start or manual rewrite (no active main chain).
+//
 // Strategy:
 //
 //	Priority EVM: Write EVM tree first (serial), then other trees in parallel
@@ -760,7 +764,7 @@ func readMetadata(dir string) (*proto.MultiTreeMetadata, error) {
 // Performance improvement over recursive traversal:
 //   - Recursive: 240k nodes/s (random I/O, 1800 read IOPS)
 //   - Export/Import Priority EVM: 280k nodes/s (sequential I/O, stable speed)
-func (t *MultiTree) WriteSnapshotViaExport(ctx context.Context, dir string, wp *pond.WorkerPool) error {
+func (t *MultiTree) WriteSnapshotViaExport(ctx context.Context, dir string, wp *pond.WorkerPool, disablePrefetch bool) error {
 	fmt.Printf("[SNAPSHOT WRITE] Starting to write %d trees using Export/Import (Priority EVM)\n", len(t.trees))
 
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil { //nolint:gosec
@@ -768,7 +772,7 @@ func (t *MultiTree) WriteSnapshotViaExport(ctx context.Context, dir string, wp *
 	}
 
 	// Use Priority EVM strategy: write EVM first, then others in parallel
-	return t.writeSnapshotPriorityEVMViaExport(ctx, dir, wp)
+	return t.writeSnapshotPriorityEVMViaExport(ctx, dir, wp, disablePrefetch)
 }
 
 // writeSnapshotParallelViaExport writes all trees in parallel using Export/Import
@@ -874,7 +878,7 @@ func (t *MultiTree) writeSnapshotParallelViaExport(ctx context.Context, dir stri
 //  2. Write EVM (with cache drop)
 //  3. Prefetch large trees only (bank+acc, 35GB) - small trees don't need prefetch
 //  4. Write all remaining trees in parallel
-func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir string, wp *pond.WorkerPool) error {
+func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir string, wp *pond.WorkerPool, disablePrefetch bool) error {
 	startTime := time.Now()
 
 	// Find EVM tree first
@@ -891,16 +895,18 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 		}
 	}
 
-	// Phase 0: Drop non-EVM trees' page cache
-	// Critical: Cold start loads all trees with MADV_WILLNEED, leaving bank/acc in cache (~25GB residual)
-	// This residual cache competes with EVM prefetch and can cause cache eviction
-	// By dropping non-EVM cache first, we ensure EVM has full access to page cache
-	fmt.Printf("[CACHE DROP] Phase 0: Dropping page cache for non-EVM trees (bank: 14.6GB, acc: 8GB)\n")
+	var phase0Elapsed float64
+	var prefetch1Elapsed float64
+
+	// Phase 0: Always drop non-EVM cache before writing EVM
+	// This is critical to prevent cache pollution from reducing EVM export performance
+	// Without this, bank (13GB) + acc (11GB) in cache will cause EVM speed to drop 10x
+	// from 1000k nodes/s to 130k nodes/s when cache fills up at ~46% progress
+	fmt.Printf("[CACHE] Phase 0: Dropping page cache for non-EVM trees\n")
 	phase0Start := time.Now()
 	droppedCount := 0
 	for _, entry := range otherTrees {
 		if entry.Tree.snapshot != nil {
-			// Drop cache for all snapshot files (nodes, leaves, kvs)
 			if entry.Tree.snapshot.nodesMap != nil && entry.Tree.snapshot.nodesMap.file != nil {
 				dropPageCache(entry.Tree.snapshot.nodesMap.file)
 			}
@@ -913,58 +919,105 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 			droppedCount++
 		}
 	}
-	phase0Elapsed := time.Since(phase0Start).Seconds()
-	fmt.Printf("[CACHE DROP] Phase 0 completed: Dropped cache for %d trees in %.1fs\n", droppedCount, phase0Elapsed)
+	phase0Elapsed = time.Since(phase0Start).Seconds()
+	fmt.Printf("[CACHE] Phase 0 completed: Dropped cache for %d trees in %.1fs\n", droppedCount, phase0Elapsed)
 
-	// Phase 1: Prefetch EVM ONLY (81GB)
-	// Now that non-EVM cache is dropped, EVM has full page cache available (~110GB free in 128GB system)
-	var prefetch1Elapsed float64
-	if evmTree != nil && evmTree.snapshot != nil {
-		fmt.Printf("[PREFETCH] Phase 1: Prefetching EVM tree ONLY (81GB, 73%% of data)\n")
-		prefetch1Start := time.Now()
-
-		if err := evmTree.snapshot.PrefetchFiles(); err != nil {
-			fmt.Printf("[PREFETCH] Warning: EVM prefetch failed: %v (continuing anyway)\n", err)
+	if disablePrefetch {
+		// Background rewrite mode: Main chain is running, sharing same snapshot files
+		// Prefetch would cause cache interference and AppHash mismatches
+		// But Phase 0 cache drop is still done above to ensure clean cache for EVM
+		fmt.Printf("[PREFETCH] DISABLED: Background rewrite mode (main chain running)\n")
+		prefetch1Elapsed = 0
+	} else {
+		// Cold start mode: No main chain running, need prefetch for performance
+		// Phase 1: Prefetch EVM snapshot for fast export
+		if evmTree != nil && evmTree.snapshot != nil {
+			fmt.Printf("[PREFETCH] Phase 1: Prefetching EVM tree (81GB)\n")
+			prefetch1Start := time.Now()
+			if err := evmTree.snapshot.PrefetchFiles(); err != nil {
+				fmt.Printf("[PREFETCH] Warning: EVM prefetch failed: %v (continuing anyway)\n", err)
+			}
+			prefetch1Elapsed = time.Since(prefetch1Start).Seconds()
+			fmt.Printf("[PREFETCH] Phase 1 completed in %.1fs\n", prefetch1Elapsed)
 		}
-
-		prefetch1Elapsed = time.Since(prefetch1Start).Seconds()
-		fmt.Printf("[PREFETCH] Phase 1 completed: EVM prefetched in %.1fs (should achieve ~100%% cache hit)\n", prefetch1Elapsed)
 	}
 
-	// Phase 2: Write EVM tree (serial) with cache drop
-	// Also start a background goroutine to keep EVM snapshot in cache
-	// This prevents eviction by PebbleDB RPC reads during the export
+	// Phase 2: Write EVM tree (serial) with periodic cache maintenance
 	var evmElapsed float64
 	if evmTree != nil {
-		fmt.Printf("[EXPORT/IMPORT] Phase 2: Writing EVM tree (serial, cache drops prevent eviction)\n")
-
-		// Start background cache keeper for EVM snapshot
-		// This periodically touches the pages to keep them in cache
-		// Critical when RPC is active and PebbleDB is competing for cache
-		keeperCtx, keeperCancel := context.WithCancel(ctx)
-		if evmTree.snapshot != nil {
-			go evmTree.snapshot.KeepInCache(keeperCtx)
-			fmt.Printf("[CACHE KEEPER] Started background cache keeper for EVM snapshot\n")
-		}
+		fmt.Printf("[EXPORT/IMPORT] Phase 2: Writing EVM tree (serial)\n")
 
 		evmStart := time.Now()
 
+		// Start background goroutine to periodically drop non-EVM cache
+		// This prevents main chain's mmap access from polluting cache during export
+		// Main chain and cloned DB share same mmap files, so main chain queries
+		// will trigger page faults that reload bank/acc data to cache
+		//
+		// Trade-off analysis:
+		// - Pros: Maintains clean cache for EVM export, prevents 10x slowdown
+		// - Cons: Main chain queries to bank/acc may experience cache misses
+		// - Impact: Minimal for block processing (uses MemNode), moderate for RPC queries
+		//
+		// Tuning: Use 5-minute interval to balance EVM performance vs main chain impact
+		stopCacheMaintenance := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			dropCount := 0
+
+			// Helper function to drop cache for all non-EVM trees
+			dropNonEVMCache := func() {
+				droppedCount := 0
+				for _, entry := range otherTrees {
+					if entry.Tree.snapshot != nil {
+						if entry.Tree.snapshot.nodesMap != nil && entry.Tree.snapshot.nodesMap.file != nil {
+							dropPageCache(entry.Tree.snapshot.nodesMap.file)
+							droppedCount++
+						}
+						if entry.Tree.snapshot.leavesMap != nil && entry.Tree.snapshot.leavesMap.file != nil {
+							dropPageCache(entry.Tree.snapshot.leavesMap.file)
+						}
+						if entry.Tree.snapshot.kvsMap != nil && entry.Tree.snapshot.kvsMap.file != nil {
+							dropPageCache(entry.Tree.snapshot.kvsMap.file)
+						}
+					}
+				}
+				fmt.Printf("[CACHE MAINTENANCE] Dropped cache for %d non-EVM trees\n", droppedCount)
+			}
+
+			// First drop after 2 minutes (give main chain some time to warm up cache if needed)
+			time.Sleep(2 * time.Minute)
+			dropCount++
+			fmt.Printf("[CACHE MAINTENANCE] Iteration %d: Re-dropping non-EVM cache\n", dropCount)
+			dropNonEVMCache()
+
+			// Then drop every 5 minutes (longer interval to reduce main chain impact)
+			for {
+				select {
+				case <-ticker.C:
+					dropCount++
+					fmt.Printf("[CACHE MAINTENANCE] Iteration %d: Re-dropping non-EVM cache\n", dropCount)
+					dropNonEVMCache()
+				case <-stopCacheMaintenance:
+					return
+				}
+			}
+		}()
+
 		if err := evmTree.RewriteSnapshotViaExport(ctx, filepath.Join(dir, evmName)); err != nil {
-			keeperCancel() // Stop cache keeper on error
+			close(stopCacheMaintenance)
 			return fmt.Errorf("failed to write EVM tree: %w", err)
 		}
 
+		close(stopCacheMaintenance)
 		evmElapsed = time.Since(evmStart).Seconds()
-		keeperCancel() // Stop cache keeper after EVM is done
-		fmt.Printf("[EXPORT/IMPORT] Phase 2 completed: EVM tree written in %.1fs\n", evmElapsed)
-		fmt.Printf("[CACHE KEEPER] Stopped background cache keeper for EVM snapshot\n")
+		fmt.Printf("[EXPORT/IMPORT] Phase 2 completed: EVM tree written in %.1fs (%.1fmin)\n", evmElapsed, evmElapsed/60)
 	}
 
-	// Phase 3: Prefetch large trees ONLY (bank + acc = 35GB)
-	// Critical: Only prefetch large trees to avoid wasting time on small trees
-	// Small trees (<10M nodes) are fast enough without prefetch (100-120k nodes/s)
-	// Large trees (>100M nodes) need prefetch to maintain high speed (~1000k nodes/s)
-	var prefetch2Elapsed float64
+	// Phase 3: Drop EVM cache and prefetch large trees (bank + acc = 35GB)
+	// Core principle: Only keep cache for trees being written, drop others
+	// Now writing bank/acc, so drop EVM cache to free up space
 	var largeTrees []NamedTree
 	for _, entry := range otherTrees {
 		// Only prefetch trees with >100M nodes (bank: 278M, acc: 155M)
@@ -974,8 +1027,26 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 		}
 	}
 
-	if len(largeTrees) > 0 {
-		fmt.Printf("[PREFETCH] Phase 3: Prefetching %d large trees (bank+acc, 35GB, 25%% of data)\n", len(largeTrees))
+	// Always drop EVM cache before Phase 4 (both cold start and background modes)
+	// Principle: Only keep cache for trees being written
+	if evmTree != nil && evmTree.snapshot != nil {
+		fmt.Printf("[CACHE] Phase 3 prep: Dropping EVM cache (52GB) to make room for bank+acc\n")
+		if evmTree.snapshot.nodesMap != nil && evmTree.snapshot.nodesMap.file != nil {
+			dropPageCache(evmTree.snapshot.nodesMap.file)
+		}
+		if evmTree.snapshot.leavesMap != nil && evmTree.snapshot.leavesMap.file != nil {
+			dropPageCache(evmTree.snapshot.leavesMap.file)
+		}
+		if evmTree.snapshot.kvsMap != nil && evmTree.snapshot.kvsMap.file != nil {
+			dropPageCache(evmTree.snapshot.kvsMap.file)
+		}
+		fmt.Printf("[CACHE] Phase 3 prep: EVM cache dropped\n")
+	}
+
+	var prefetch2Elapsed float64
+	if !disablePrefetch && len(largeTrees) > 0 {
+		// Cold start mode: Prefetch large trees (bank+acc) for better performance
+		fmt.Printf("[PREFETCH] Phase 3: Prefetching %d large trees (bank+acc, 35GB)\n", len(largeTrees))
 		prefetch2Start := time.Now()
 
 		prefetchGroup, _ := wp.GroupContext(ctx)
@@ -1001,6 +1072,9 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 		prefetchGroup.Wait()
 		prefetch2Elapsed = time.Since(prefetch2Start).Seconds()
 		fmt.Printf("[PREFETCH] Phase 3 completed: %d large trees prefetched in %.1fs\n", len(largeTrees), prefetch2Elapsed)
+	} else if disablePrefetch {
+		fmt.Printf("[PREFETCH] Phase 3 DISABLED: Skipping prefetch (background rewrite mode)\n")
+		prefetch2Elapsed = 0
 	}
 
 	// Phase 4: Write other trees in parallel
