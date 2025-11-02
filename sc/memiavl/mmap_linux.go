@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 // dropPageCache tells the OS to drop the file's pages from page cache
@@ -29,15 +30,23 @@ func dropPageCache(f *os.File) {
 		return
 	}
 
-	// Call fadvise64 syscall
-	_, _, _ = syscall.Syscall6(
-		syscall.SYS_FADVISE64,
-		uintptr(fd),
-		0,                   // offset
-		uintptr(fi.Size()),  // length
-		POSIX_FADV_DONTNEED, // advice
-		0, 0,
-	)
+	// For read-only mmap files, we need to call fadvise multiple times
+	// because the kernel may not honor the first call if pages are being accessed
+	// Call twice with a small gap to be more aggressive
+	for i := 0; i < 2; i++ {
+		syscall.Syscall6(
+			syscall.SYS_FADVISE64,
+			uintptr(fd),
+			0,                   // offset
+			uintptr(fi.Size()),  // length
+			POSIX_FADV_DONTNEED, // advice
+			0, 0,
+		)
+		if i == 0 {
+			// Small sleep to allow kernel to process the first hint
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 	// Ignore errors - this is just a hint to the kernel
 }
 
@@ -57,9 +66,9 @@ func dropPageCacheRange(f *os.File, offset, end int64) {
 	_, _, _ = syscall.Syscall6(
 		syscall.SYS_FADVISE64,
 		uintptr(fd),
-		uintptr(offset),            // start offset
-		uintptr(length),            // length of range to drop
-		POSIX_FADV_DONTNEED,        // advice
+		uintptr(offset),     // start offset
+		uintptr(length),     // length of range to drop
+		POSIX_FADV_DONTNEED, // advice
 		0, 0,
 	)
 	// Ignore errors - this is just a hint to the kernel
@@ -90,8 +99,8 @@ func touchPageCache(f *os.File) {
 	_, _, _ = syscall.Syscall6(
 		syscall.SYS_FADVISE64,
 		uintptr(fd),
-		0,                  // offset
-		uintptr(fi.Size()), // length
+		0,                   // offset
+		uintptr(fi.Size()),  // length
 		POSIX_FADV_WILLNEED, // advice
 		0, 0,
 	)

@@ -905,22 +905,34 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 	fmt.Printf("[CACHE] Phase 0: Dropping page cache for non-EVM trees\n")
 	phase0Start := time.Now()
 	droppedCount := 0
+	var totalDroppedSize int64
 	for _, entry := range otherTrees {
 		if entry.Tree.snapshot != nil {
+			// Drop and report each tree
 			if entry.Tree.snapshot.nodesMap != nil && entry.Tree.snapshot.nodesMap.file != nil {
+				if fi, err := entry.Tree.snapshot.nodesMap.file.Stat(); err == nil {
+					totalDroppedSize += fi.Size()
+				}
 				dropPageCache(entry.Tree.snapshot.nodesMap.file)
 			}
 			if entry.Tree.snapshot.leavesMap != nil && entry.Tree.snapshot.leavesMap.file != nil {
+				if fi, err := entry.Tree.snapshot.leavesMap.file.Stat(); err == nil {
+					totalDroppedSize += fi.Size()
+				}
 				dropPageCache(entry.Tree.snapshot.leavesMap.file)
 			}
 			if entry.Tree.snapshot.kvsMap != nil && entry.Tree.snapshot.kvsMap.file != nil {
+				if fi, err := entry.Tree.snapshot.kvsMap.file.Stat(); err == nil {
+					totalDroppedSize += fi.Size()
+				}
 				dropPageCache(entry.Tree.snapshot.kvsMap.file)
 			}
 			droppedCount++
 		}
 	}
 	phase0Elapsed = time.Since(phase0Start).Seconds()
-	fmt.Printf("[CACHE] Phase 0 completed: Dropped cache for %d trees in %.1fs\n", droppedCount, phase0Elapsed)
+	fmt.Printf("[CACHE] Phase 0 completed: Dropped cache for %d trees (%.1f GB total) in %.1fs\n",
+		droppedCount, float64(totalDroppedSize)/(1024*1024*1024), phase0Elapsed)
 
 	if disablePrefetch {
 		// Background rewrite mode: Main chain is running, sharing same snapshot files
