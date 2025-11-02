@@ -902,36 +902,33 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 	// This is critical to prevent cache pollution from reducing EVM export performance
 	// Without this, bank (13GB) + acc (11GB) in cache will cause EVM speed to drop 10x
 	// from 1000k nodes/s to 130k nodes/s when cache fills up at ~46% progress
-	fmt.Printf("[CACHE] Phase 0: Dropping page cache for non-EVM trees\n")
+	//
+	// CRITICAL: Must use madvise(MADV_DONTNEED) on mmap buffer, NOT fadvise on file descriptor
+	// fadvise doesn't work for mmap files!
+	fmt.Printf("[CACHE] Phase 0: Dropping mmap cache for non-EVM trees (using madvise)\n")
 	phase0Start := time.Now()
 	droppedCount := 0
 	var totalDroppedSize int64
 	for _, entry := range otherTrees {
 		if entry.Tree.snapshot != nil {
-			// Drop and report each tree
-			if entry.Tree.snapshot.nodesMap != nil && entry.Tree.snapshot.nodesMap.file != nil {
-				if fi, err := entry.Tree.snapshot.nodesMap.file.Stat(); err == nil {
-					totalDroppedSize += fi.Size()
-				}
-				dropPageCache(entry.Tree.snapshot.nodesMap.file)
+			// Drop mmap cache using madvise (fadvise doesn't work on mmap!)
+			if entry.Tree.snapshot.nodesMap != nil {
+				totalDroppedSize += int64(len(entry.Tree.snapshot.nodesMap.Data()))
+				entry.Tree.snapshot.nodesMap.DropFromCache()
 			}
-			if entry.Tree.snapshot.leavesMap != nil && entry.Tree.snapshot.leavesMap.file != nil {
-				if fi, err := entry.Tree.snapshot.leavesMap.file.Stat(); err == nil {
-					totalDroppedSize += fi.Size()
-				}
-				dropPageCache(entry.Tree.snapshot.leavesMap.file)
+			if entry.Tree.snapshot.leavesMap != nil {
+				totalDroppedSize += int64(len(entry.Tree.snapshot.leavesMap.Data()))
+				entry.Tree.snapshot.leavesMap.DropFromCache()
 			}
-			if entry.Tree.snapshot.kvsMap != nil && entry.Tree.snapshot.kvsMap.file != nil {
-				if fi, err := entry.Tree.snapshot.kvsMap.file.Stat(); err == nil {
-					totalDroppedSize += fi.Size()
-				}
-				dropPageCache(entry.Tree.snapshot.kvsMap.file)
+			if entry.Tree.snapshot.kvsMap != nil {
+				totalDroppedSize += int64(len(entry.Tree.snapshot.kvsMap.Data()))
+				entry.Tree.snapshot.kvsMap.DropFromCache()
 			}
 			droppedCount++
 		}
 	}
 	phase0Elapsed = time.Since(phase0Start).Seconds()
-	fmt.Printf("[CACHE] Phase 0 completed: Dropped cache for %d trees (%.1f GB total) in %.1fs\n",
+	fmt.Printf("[CACHE] Phase 0 completed: Dropped mmap cache for %d trees (%.1f GB total) in %.1fs\n",
 		droppedCount, float64(totalDroppedSize)/(1024*1024*1024), phase0Elapsed)
 
 	if disablePrefetch {
@@ -980,23 +977,24 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 			dropCount := 0
 
 			// Helper function to drop cache for all non-EVM trees
+			// Use madvise on mmap buffers (not fadvise on file descriptors)
 			dropNonEVMCache := func() {
 				droppedCount := 0
 				for _, entry := range otherTrees {
 					if entry.Tree.snapshot != nil {
-						if entry.Tree.snapshot.nodesMap != nil && entry.Tree.snapshot.nodesMap.file != nil {
-							dropPageCache(entry.Tree.snapshot.nodesMap.file)
+						if entry.Tree.snapshot.nodesMap != nil {
+							entry.Tree.snapshot.nodesMap.DropFromCache()
 							droppedCount++
 						}
-						if entry.Tree.snapshot.leavesMap != nil && entry.Tree.snapshot.leavesMap.file != nil {
-							dropPageCache(entry.Tree.snapshot.leavesMap.file)
+						if entry.Tree.snapshot.leavesMap != nil {
+							entry.Tree.snapshot.leavesMap.DropFromCache()
 						}
-						if entry.Tree.snapshot.kvsMap != nil && entry.Tree.snapshot.kvsMap.file != nil {
-							dropPageCache(entry.Tree.snapshot.kvsMap.file)
+						if entry.Tree.snapshot.kvsMap != nil {
+							entry.Tree.snapshot.kvsMap.DropFromCache()
 						}
 					}
 				}
-				fmt.Printf("[CACHE MAINTENANCE] Dropped cache for %d non-EVM trees\n", droppedCount)
+				fmt.Printf("[CACHE MAINTENANCE] Dropped mmap cache for %d non-EVM trees\n", droppedCount)
 			}
 
 			// First drop after 2 minutes (give main chain some time to warm up cache if needed)
@@ -1042,18 +1040,19 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 
 	// Always drop EVM cache before Phase 4 (both cold start and background modes)
 	// Principle: Only keep cache for trees being written
+	// Use madvise on mmap buffers (not fadvise on file descriptors)
 	if evmTree != nil && evmTree.snapshot != nil {
-		fmt.Printf("[CACHE] Phase 3 prep: Dropping EVM cache (52GB) to make room for bank+acc\n")
-		if evmTree.snapshot.nodesMap != nil && evmTree.snapshot.nodesMap.file != nil {
-			dropPageCache(evmTree.snapshot.nodesMap.file)
+		fmt.Printf("[CACHE] Phase 3 prep: Dropping EVM mmap cache (52GB) to make room for bank+acc\n")
+		if evmTree.snapshot.nodesMap != nil {
+			evmTree.snapshot.nodesMap.DropFromCache()
 		}
-		if evmTree.snapshot.leavesMap != nil && evmTree.snapshot.leavesMap.file != nil {
-			dropPageCache(evmTree.snapshot.leavesMap.file)
+		if evmTree.snapshot.leavesMap != nil {
+			evmTree.snapshot.leavesMap.DropFromCache()
 		}
-		if evmTree.snapshot.kvsMap != nil && evmTree.snapshot.kvsMap.file != nil {
-			dropPageCache(evmTree.snapshot.kvsMap.file)
+		if evmTree.snapshot.kvsMap != nil {
+			evmTree.snapshot.kvsMap.DropFromCache()
 		}
-		fmt.Printf("[CACHE] Phase 3 prep: EVM cache dropped\n")
+		fmt.Printf("[CACHE] Phase 3 prep: EVM mmap cache dropped\n")
 	}
 
 	var prefetch2Elapsed float64
