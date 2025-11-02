@@ -949,6 +949,7 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 
 		evmStart := time.Now()
 
+		fmt.Printf("[CACHE MAINTENANCE] Starting cache maintenance goroutine (will re-drop every 5min)\n")
 		// Start background goroutine to periodically drop non-EVM cache
 		// This prevents main chain's mmap access from polluting cache during export
 		// Main chain and cloned DB share same mmap files, so main chain queries
