@@ -590,15 +590,15 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 		// Use Export/Import approach (sequential I/O, 2-3x faster)
 		// In production, this is always called from background rewrite (main chain running)
 		// In tests, it may be called directly (no main chain)
-		// Disable prefetch and cache drop during background rewrite to avoid cache interference
+		// Disable prefetch during background rewrite to avoid cache interference
 		disablePrefetch := db.isBackgroundClone
 
-		// Add flag to context to disable cache drop during background rewrite
-		type contextKey string
+		// Write-side cache drop is ALWAYS enabled (both background and test modes)
+		// This is critical to prevent write data from accumulating in page cache
+		// and evicting read data, which would cause 10x slowdown at ~46% progress
 		if disablePrefetch {
 			// Production mode: background rewrite while main chain is running
-			ctx = context.WithValue(ctx, contextKey("disableCacheDrop"), true)
-			fmt.Printf("[REWRITE] Using Export/Import (background mode: prefetch+cache-drop disabled)\n")
+			fmt.Printf("[REWRITE] Using Export/Import (background mode: prefetch disabled, cache-drop enabled)\n")
 		} else {
 			// Test mode: direct call, no main chain running
 			fmt.Printf("[REWRITE] Using Export/Import (test mode: prefetch+cache-drop enabled)\n")

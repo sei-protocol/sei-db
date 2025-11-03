@@ -495,21 +495,19 @@ func writeSnapshotWithBuffer(
 	}()
 
 	// Wrap files with cache-dropping writers
-	// Check if we should disable cache drop (during background rewrite with main chain running)
-	type contextKey string
-	disableDrop := ctx.Value(contextKey("disableCacheDrop")) == true
-
+	// Write-side cache drop is ALWAYS enabled for optimal performance
+	// This prevents write data from accumulating in page cache and evicting read data
 	nodesDropWriter := &cacheDropWriter{
 		f:           fpNodes,
-		disableDrop: disableDrop,
+		disableDrop: false, // Always enable cache drop
 	}
 	leavesDropWriter := &cacheDropWriter{
 		f:           fpLeaves,
-		disableDrop: disableDrop,
+		disableDrop: false, // Always enable cache drop
 	}
 	kvsDropWriter := &cacheDropWriter{
 		f:           fpKVs,
-		disableDrop: disableDrop,
+		disableDrop: false, // Always enable cache drop
 	}
 
 	// Create buffered writers with large buffers (2GB each for EVM tree)

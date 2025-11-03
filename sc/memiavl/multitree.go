@@ -905,6 +905,13 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 	//
 	// CRITICAL: Must use madvise(MADV_DONTNEED) on mmap buffer, NOT fadvise on file descriptor
 	// fadvise doesn't work for mmap files!
+	//
+	// Trade-off: This WILL affect main chain's cache for bank/acc snapshots
+	// - Main chain and background clone share the same mmap files (shallow copy)
+	// - Dropping cache here affects both processes
+	// - Impact: Main chain RPC queries to old snapshot data may experience cache misses
+	// - Mitigation: Main chain primarily uses MemNode (new data), not snapshot (old data)
+	// - Verdict: Acceptable trade-off to prevent 5-hour rewrite (vs 30-min with clean cache)
 	fmt.Printf("[CACHE] Phase 0: Dropping mmap cache for non-EVM trees (using madvise)\n")
 	phase0Start := time.Now()
 	droppedCount := 0
