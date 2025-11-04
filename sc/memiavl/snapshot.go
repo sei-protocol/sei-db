@@ -38,14 +38,15 @@ const (
 	FileNameMetadata = "metadata"
 )
 
-// cacheDropWriter wraps an os.File and drops page cache after every write
-// This aggressively prevents write data from evicting source snapshot pages
-// Critical for maintaining 900-1200k nodes/s read speed throughout the process
+// cacheDropWriter wraps an os.File for writing snapshot data
+//
+// EXPERIMENT: Write-side cache drop DISABLED
+// Testing if Export/Import pipeline alone is sufficient for performance
+// Previous hypothesis: cache drop prevents write data from evicting read cache
+// Current test: Verify if sequential I/O alone maintains 900-1200k nodes/s
 type cacheDropWriter struct {
-	f           *os.File
-	written     int64
-	lastDropAt  int64 // Track where we last dropped cache
-	disableDrop bool  // True during background rewrite (main chain running)
+	f       *os.File
+	written int64
 }
 
 func (w *cacheDropWriter) Write(p []byte) (n int, err error) {
@@ -56,17 +57,21 @@ func (w *cacheDropWriter) Write(p []byte) (n int, err error) {
 
 	w.written += int64(n)
 
-	// Always drop cache immediately after write (following 189e1ee logic that worked)
-	// This is more aggressive than threshold-based dropping but proven to work reliably
-	if !w.disableDrop {
-		dropPageCacheRange(w.f, w.lastDropAt, w.written)
-		w.lastDropAt = w.written
-
-		// Log every 256MB to monitor progress
-		if w.written%(256*1024*1024) < int64(n) {
-			fmt.Printf("[CACHE DROP] File %s: dropped cache at %dMB total\n",
-				w.f.Name(), w.written/(1024*1024))
-		}
+	// EXPERIMENT: Cache drop mechanism REMOVED
+	// Original code performed: dropPageCacheRange(w.f, w.lastDropAt, w.written)
+	//
+	// Purpose of this experiment:
+	// - Verify if Export/Import sequential I/O alone is sufficient
+	// - Test hypothesis: cache drop prevents 30-46% performance degradation
+	//
+	// Expected results:
+	// - If cache drop is effective: Performance will degrade at 30-46%
+	// - If pipeline alone is sufficient: Performance remains 900-1200k nodes/s
+	//
+	// Log every 256MB to track progress
+	if w.written%(256*1024*1024) < int64(n) {
+		fmt.Printf("[EXPERIMENT] NO CACHE DROP - File %s: %dMB written\n",
+			w.f.Name(), w.written/(1024*1024))
 	}
 
 	return n, err
@@ -494,20 +499,16 @@ func writeSnapshotWithBuffer(
 		}
 	}()
 
-	// Wrap files with cache-dropping writers
-	// Write-side cache drop is ALWAYS enabled for optimal performance
-	// This prevents write data from accumulating in page cache and evicting read data
+	// Wrap files with monitoring writers (cache drop DISABLED for experiment)
+	// Testing if Export/Import pipeline alone maintains performance
 	nodesDropWriter := &cacheDropWriter{
-		f:           fpNodes,
-		disableDrop: false, // Always enable cache drop
+		f: fpNodes,
 	}
 	leavesDropWriter := &cacheDropWriter{
-		f:           fpLeaves,
-		disableDrop: false, // Always enable cache drop
+		f: fpLeaves,
 	}
 	kvsDropWriter := &cacheDropWriter{
-		f:           fpKVs,
-		disableDrop: false, // Always enable cache drop
+		f: fpKVs,
 	}
 
 	// Create buffered writers with large buffers (2GB each for EVM tree)
