@@ -898,31 +898,10 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 	var phase0Elapsed float64
 	var prefetch1Elapsed float64
 
-	// Phase 0: REMOVED - Read-side cache drop via madvise
-	//
-	// After extensive testing, we found that madvise(MADV_DONTNEED) has negligible
-	// effectiveness in background rewrite mode:
-	//
-	// Evidence from production testing:
-	// - Phase 0 drops 44.4GB of bank/acc cache
-	// - Main chain immediately reloads 30GB within minutes (shared mmap)
-	// - On 256GB RAM: no performance difference with/without Phase 0
-	// - On 128GB RAM: still bottlenecks at ~35% regardless of Phase 0
-	//
-	// Why madvise doesn't work here:
-	// - Main chain and background clone share the same mmap files (shallow copy)
-	// - Main chain actively processes blocks, continuously accessing bank/acc
-	// - Kernel cannot drop pages that are being actively referenced
-	//
-	// Real cache cleanup happens in ReplaceWith() via munmap() after snapshot switch,
-	// which is automatic and effective (verified: 115GB freed instantly).
-	//
-	// Decision: Remove this code to reduce complexity and avoid false expectations.
-	// If 128GB RAM systems experience bottlenecks, the solution is hardware upgrade,
-	// not software tricks that don't work.
-
+	// Phase 0: No cache drop needed
+	// Sequential I/O from Export/Import pipeline is sufficient for performance
+	// Cache cleanup happens automatically via munmap() in ReplaceWith()
 	phase0Elapsed = 0
-	fmt.Printf("[CACHE] Phase 0: SKIPPED (read-side cache drop removed - ineffective in background mode)\n")
 
 	if disablePrefetch {
 		// Background rewrite mode: Main chain is running, sharing same snapshot files
@@ -965,7 +944,6 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 	}
 
 	// Phase 3: Prefetch large trees (bank + acc + wasm) in cold start mode
-	// Note: Phase 3 EVM cache drop has been REMOVED (same reason as Phase 0)
 	var largeTrees []NamedTree
 	for _, entry := range otherTrees {
 		// Prefetch trees with significant node count:

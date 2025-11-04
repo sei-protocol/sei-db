@@ -38,18 +38,13 @@ const (
 	FileNameMetadata = "metadata"
 )
 
-// cacheDropWriter wraps an os.File for writing snapshot data
-//
-// EXPERIMENT: Write-side cache drop DISABLED
-// Testing if Export/Import pipeline alone is sufficient for performance
-// Previous hypothesis: cache drop prevents write data from evicting read cache
-// Current test: Verify if sequential I/O alone maintains 900-1200k nodes/s
-type cacheDropWriter struct {
+// monitoringWriter wraps an os.File to track write progress
+type monitoringWriter struct {
 	f       *os.File
 	written int64
 }
 
-func (w *cacheDropWriter) Write(p []byte) (n int, err error) {
+func (w *monitoringWriter) Write(p []byte) (n int, err error) {
 	n, err = w.f.Write(p)
 	if err != nil {
 		return n, err
@@ -57,21 +52,9 @@ func (w *cacheDropWriter) Write(p []byte) (n int, err error) {
 
 	w.written += int64(n)
 
-	// EXPERIMENT: Cache drop mechanism REMOVED
-	// Original code performed: dropPageCacheRange(w.f, w.lastDropAt, w.written)
-	//
-	// Purpose of this experiment:
-	// - Verify if Export/Import sequential I/O alone is sufficient
-	// - Test hypothesis: cache drop prevents 30-46% performance degradation
-	//
-	// Expected results:
-	// - If cache drop is effective: Performance will degrade at 30-46%
-	// - If pipeline alone is sufficient: Performance remains 900-1200k nodes/s
-	//
-	// Log every 256MB to track progress
+	// Log progress every 256MB
 	if w.written%(256*1024*1024) < int64(n) {
-		fmt.Printf("[EXPERIMENT] NO CACHE DROP - File %s: %dMB written\n",
-			w.f.Name(), w.written/(1024*1024))
+		fmt.Printf("[WRITE] %s: %dMB written\n", w.f.Name(), w.written/(1024*1024))
 	}
 
 	return n, err
@@ -499,22 +482,15 @@ func writeSnapshotWithBuffer(
 		}
 	}()
 
-	// Wrap files with monitoring writers (cache drop DISABLED for experiment)
-	// Testing if Export/Import pipeline alone maintains performance
-	nodesDropWriter := &cacheDropWriter{
-		f: fpNodes,
-	}
-	leavesDropWriter := &cacheDropWriter{
-		f: fpLeaves,
-	}
-	kvsDropWriter := &cacheDropWriter{
-		f: fpKVs,
-	}
+	// Wrap files with monitoring writers for progress tracking
+	nodesMonitor := &monitoringWriter{f: fpNodes}
+	leavesMonitor := &monitoringWriter{f: fpLeaves}
+	kvsMonitor := &monitoringWriter{f: fpKVs}
 
 	// Create buffered writers with large buffers (2GB each for EVM tree)
-	nodesWriter := bufio.NewWriterSize(nodesDropWriter, bufSize)
-	leavesWriter := bufio.NewWriterSize(leavesDropWriter, bufSize)
-	kvsWriter := bufio.NewWriterSize(kvsDropWriter, bufSize)
+	nodesWriter := bufio.NewWriterSize(nodesMonitor, bufSize)
+	leavesWriter := bufio.NewWriterSize(leavesMonitor, bufSize)
+	kvsWriter := bufio.NewWriterSize(kvsMonitor, bufSize)
 
 	w := newSnapshotWriter(ctx, nodesWriter, leavesWriter, kvsWriter)
 	w.treeName = filepath.Base(dir) // Set tree name for progress reporting

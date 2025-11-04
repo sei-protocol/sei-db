@@ -593,15 +593,12 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 		// Disable prefetch during background rewrite to avoid cache interference
 		disablePrefetch := db.isBackgroundClone
 
-		// Write-side cache drop is ALWAYS enabled (both background and test modes)
-		// This is critical to prevent write data from accumulating in page cache
-		// and evicting read data, which would cause 10x slowdown at ~46% progress
 		if disablePrefetch {
 			// Production mode: background rewrite while main chain is running
-			fmt.Printf("[REWRITE] Using Export/Import (background mode: prefetch disabled, cache-drop enabled)\n")
+			fmt.Printf("[REWRITE] Using Export/Import (background mode: prefetch disabled)\n")
 		} else {
 			// Test mode: direct call, no main chain running
-			fmt.Printf("[REWRITE] Using Export/Import (test mode: prefetch+cache-drop enabled)\n")
+			fmt.Printf("[REWRITE] Using Export/Import (test mode: prefetch enabled)\n")
 		}
 
 		err = db.MultiTree.WriteSnapshotViaExport(ctx, path, db.snapshotWriterPool, disablePrefetch)
