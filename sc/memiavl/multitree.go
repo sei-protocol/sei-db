@@ -898,50 +898,35 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 	var phase0Elapsed float64
 	var prefetch1Elapsed float64
 
-	// Phase 0: Always drop non-EVM cache before writing EVM
-	// This is critical to prevent cache pollution from reducing EVM export performance
-	// Without this, bank (13GB) + acc (11GB) in cache will cause EVM speed to drop 10x
-	// from 1000k nodes/s to 130k nodes/s when cache fills up at ~46% progress
+	// Phase 0: REMOVED - Read-side cache drop via madvise
 	//
-	// CRITICAL: Must use madvise(MADV_DONTNEED) on mmap buffer, NOT fadvise on file descriptor
-	// fadvise doesn't work for mmap files!
+	// After extensive testing, we found that madvise(MADV_DONTNEED) has negligible
+	// effectiveness in background rewrite mode:
 	//
-	// Trade-off: This WILL affect main chain's cache for bank/acc snapshots
+	// Evidence from production testing:
+	// - Phase 0 drops 44.4GB of bank/acc cache
+	// - Main chain immediately reloads 30GB within minutes (shared mmap)
+	// - On 256GB RAM: no performance difference with/without Phase 0
+	// - On 128GB RAM: still bottlenecks at ~35% regardless of Phase 0
+	//
+	// Why madvise doesn't work here:
 	// - Main chain and background clone share the same mmap files (shallow copy)
-	// - Dropping cache here affects both processes
-	// - Impact: Main chain RPC queries to old snapshot data may experience cache misses
-	// - Mitigation: Main chain primarily uses MemNode (new data), not snapshot (old data)
-	// - Verdict: Acceptable trade-off to prevent 5-hour rewrite (vs 30-min with clean cache)
-	fmt.Printf("[CACHE] Phase 0: Dropping mmap cache for non-EVM trees (using madvise)\n")
-	phase0Start := time.Now()
-	droppedCount := 0
-	var totalDroppedSize int64
-	for _, entry := range otherTrees {
-		if entry.Tree.snapshot != nil {
-			// Drop mmap cache using madvise (fadvise doesn't work on mmap!)
-			if entry.Tree.snapshot.nodesMap != nil {
-				totalDroppedSize += int64(len(entry.Tree.snapshot.nodesMap.Data()))
-				entry.Tree.snapshot.nodesMap.DropFromCache()
-			}
-			if entry.Tree.snapshot.leavesMap != nil {
-				totalDroppedSize += int64(len(entry.Tree.snapshot.leavesMap.Data()))
-				entry.Tree.snapshot.leavesMap.DropFromCache()
-			}
-			if entry.Tree.snapshot.kvsMap != nil {
-				totalDroppedSize += int64(len(entry.Tree.snapshot.kvsMap.Data()))
-				entry.Tree.snapshot.kvsMap.DropFromCache()
-			}
-			droppedCount++
-		}
-	}
-	phase0Elapsed = time.Since(phase0Start).Seconds()
-	fmt.Printf("[CACHE] Phase 0 completed: Dropped mmap cache for %d trees (%.1f GB total) in %.1fs\n",
-		droppedCount, float64(totalDroppedSize)/(1024*1024*1024), phase0Elapsed)
+	// - Main chain actively processes blocks, continuously accessing bank/acc
+	// - Kernel cannot drop pages that are being actively referenced
+	//
+	// Real cache cleanup happens in ReplaceWith() via munmap() after snapshot switch,
+	// which is automatic and effective (verified: 115GB freed instantly).
+	//
+	// Decision: Remove this code to reduce complexity and avoid false expectations.
+	// If 128GB RAM systems experience bottlenecks, the solution is hardware upgrade,
+	// not software tricks that don't work.
+
+	phase0Elapsed = 0
+	fmt.Printf("[CACHE] Phase 0: SKIPPED (read-side cache drop removed - ineffective in background mode)\n")
 
 	if disablePrefetch {
 		// Background rewrite mode: Main chain is running, sharing same snapshot files
 		// Prefetch would cause cache interference and AppHash mismatches
-		// But Phase 0 cache drop is still done above to ensure clean cache for EVM
 		fmt.Printf("[PREFETCH] DISABLED: Background rewrite mode (main chain running)\n")
 		prefetch1Elapsed = 0
 	} else {
@@ -965,107 +950,38 @@ func (t *MultiTree) writeSnapshotPriorityEVMViaExport(ctx context.Context, dir s
 
 		evmStart := time.Now()
 
-		fmt.Printf("[CACHE MAINTENANCE] Starting cache maintenance goroutine (will re-drop every 5min)\n")
-		// Start background goroutine to periodically drop non-EVM cache
-		// This prevents main chain's mmap access from polluting cache during export
-		// Main chain and cloned DB share same mmap files, so main chain queries
-		// will trigger page faults that reload bank/acc data to cache
-		//
-		// Trade-off analysis:
-		// - Pros: Maintains clean cache for EVM export, prevents 10x slowdown
-		// - Cons: Main chain queries to bank/acc may experience cache misses
-		// - Impact: Minimal for block processing (uses MemNode), moderate for RPC queries
-		//
-		// Tuning: Use 5-minute interval to balance EVM performance vs main chain impact
-		stopCacheMaintenance := make(chan struct{})
-		go func() {
-			ticker := time.NewTicker(5 * time.Minute)
-			defer ticker.Stop()
-			dropCount := 0
-
-			// Helper function to drop cache for all non-EVM trees
-			// Use madvise on mmap buffers (not fadvise on file descriptors)
-			dropNonEVMCache := func() {
-				droppedCount := 0
-				for _, entry := range otherTrees {
-					if entry.Tree.snapshot != nil {
-						if entry.Tree.snapshot.nodesMap != nil {
-							entry.Tree.snapshot.nodesMap.DropFromCache()
-							droppedCount++
-						}
-						if entry.Tree.snapshot.leavesMap != nil {
-							entry.Tree.snapshot.leavesMap.DropFromCache()
-						}
-						if entry.Tree.snapshot.kvsMap != nil {
-							entry.Tree.snapshot.kvsMap.DropFromCache()
-						}
-					}
-				}
-				fmt.Printf("[CACHE MAINTENANCE] Dropped mmap cache for %d non-EVM trees\n", droppedCount)
-			}
-
-			// First drop after 2 minutes (give main chain some time to warm up cache if needed)
-			time.Sleep(2 * time.Minute)
-			dropCount++
-			fmt.Printf("[CACHE MAINTENANCE] Iteration %d: Re-dropping non-EVM cache\n", dropCount)
-			dropNonEVMCache()
-
-			// Then drop every 5 minutes (longer interval to reduce main chain impact)
-			for {
-				select {
-				case <-ticker.C:
-					dropCount++
-					fmt.Printf("[CACHE MAINTENANCE] Iteration %d: Re-dropping non-EVM cache\n", dropCount)
-					dropNonEVMCache()
-				case <-stopCacheMaintenance:
-					return
-				}
-			}
-		}()
+		// Cache maintenance goroutine REMOVED
+		// Previous code: periodically dropped non-EVM cache every 5 minutes via madvise
+		// Reality: Ineffective in background mode (main chain immediately reloads dropped pages)
+		// Evidence: Dropped 44.4GB → 30GB reloaded within minutes
+		// Decision: Keep code simple, rely on aggressive write-side cache drop instead
 
 		if err := evmTree.RewriteSnapshotViaExport(ctx, filepath.Join(dir, evmName)); err != nil {
-			close(stopCacheMaintenance)
 			return fmt.Errorf("failed to write EVM tree: %w", err)
 		}
 
-		close(stopCacheMaintenance)
 		evmElapsed = time.Since(evmStart).Seconds()
 		fmt.Printf("[EXPORT/IMPORT] Phase 2 completed: EVM tree written in %.1fs (%.1fmin)\n", evmElapsed, evmElapsed/60)
 	}
 
-	// Phase 3: Drop EVM cache and prefetch large trees (bank + acc = 35GB)
-	// Core principle: Only keep cache for trees being written, drop others
-	// Now writing bank/acc, so drop EVM cache to free up space
+	// Phase 3: Prefetch large trees (bank + acc + wasm) in cold start mode
+	// Note: Phase 3 EVM cache drop has been REMOVED (same reason as Phase 0)
 	var largeTrees []NamedTree
 	for _, entry := range otherTrees {
-		// Only prefetch trees with >100M nodes (bank: 278M, acc: 155M)
-		// Skip small trees like wasm (27M), ibc (2.6M), etc.
-		if entry.Name == "bank" || entry.Name == "acc" {
+		// Prefetch trees with significant node count:
+		// - bank: 278M nodes
+		// - acc: 155M nodes
+		// - wasm: 27M nodes (worth prefetching in cold start)
+		// Skip very small trees like ibc (2.6M), etc.
+		if entry.Name == "bank" || entry.Name == "acc" || entry.Name == "wasm" {
 			largeTrees = append(largeTrees, entry)
 		}
 	}
 
-	// Always drop EVM cache before Phase 4 (both cold start and background modes)
-	// Principle: Only keep cache for trees being written
-	// Use madvise on mmap buffers (not fadvise on file descriptors)
-	if evmTree != nil && evmTree.snapshot != nil {
-		fmt.Printf("[CACHE] Phase 3 prep: Dropping EVM mmap cache (52GB) to make room for bank+acc\n")
-		if evmTree.snapshot.nodesMap != nil {
-			evmTree.snapshot.nodesMap.DropFromCache()
-		}
-		if evmTree.snapshot.leavesMap != nil {
-			evmTree.snapshot.leavesMap.DropFromCache()
-		}
-		if evmTree.snapshot.kvsMap != nil {
-			evmTree.snapshot.kvsMap.DropFromCache()
-		}
-		fmt.Printf("[CACHE] Phase 3 prep: EVM mmap cache dropped\n")
-	}
-
 	var prefetch2Elapsed float64
 	if !disablePrefetch && len(largeTrees) > 0 {
-		// Cold start mode: Prefetch large trees (bank+acc) for better performance
-		fmt.Printf("[PREFETCH] Phase 3: Prefetching %d large trees (bank+acc, 35GB)\n", len(largeTrees))
+		// Cold start mode: Prefetch large trees (bank+acc+wasm) for better performance
+		fmt.Printf("[PREFETCH] Phase 3: Prefetching %d large trees (bank+acc+wasm)\n", len(largeTrees))
 		prefetch2Start := time.Now()
 
 		prefetchGroup, _ := wp.GroupContext(ctx)

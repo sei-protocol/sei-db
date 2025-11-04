@@ -1384,12 +1384,14 @@ func (snapshot *Snapshot) prefetchSnapshot(snapshotDir string, prefetchThreshold
 // shouldPreloadTree determines if a tree should be preloaded based on size and name
 // Only large/active trees benefit from preload; small trees add overhead
 func shouldPreloadTree(treeName string) bool {
-	// Preload the 3 largest/most active trees
+	// Preload the 4 largest/most active trees
 	// Parallel loading + madvise hints will maximize throughput even on slow disks
+	// evm (512M nodes), bank (278M nodes), acc (155M nodes), wasm (27M nodes)
 	activeTrees := map[string]bool{
 		"evm":  true,
 		"bank": true,
 		"acc":  true,
+		"wasm": true, // Added: 27M nodes, worth prefetching in cold start
 	}
 
 	return activeTrees[treeName]
