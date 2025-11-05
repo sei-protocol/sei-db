@@ -567,18 +567,15 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 	tmpDir := snapshotDir + "-tmp"
 	path := filepath.Join(db.dir, tmpDir)
 
-	fmt.Printf("[REWRITE] Using Pipeline Write\n")
-
 	writeStart := time.Now()
 	err := db.MultiTree.WriteSnapshot(ctx, path, db.snapshotWriterPool)
 	writeElapsed := time.Since(writeStart).Seconds()
 
 	if err != nil {
-		fmt.Printf("[REWRITE] Write failed after %.1fs: %v\n", writeElapsed, err)
 		return errorutils.Join(err, os.RemoveAll(path))
 	}
 
-	fmt.Printf("[REWRITE] Write completed in %.1fs (%.1fmin)\n", writeElapsed, writeElapsed/60)
+	db.logger.Info("snapshot rewrite completed", "duration_sec", writeElapsed)
 
 	if err := os.Rename(path, filepath.Join(db.dir, snapshotDir)); err != nil {
 		return err
@@ -661,7 +658,6 @@ func (db *DB) rewriteSnapshotBackground() error {
 	go func() {
 		defer close(ch)
 		startTime := time.Now()
-		fmt.Printf("[SNAPSHOT REWRITE] Starting snapshot rewrite process for version %d\n", cloned.Version())
 		cloned.logger.Info("start rewriting snapshot", "version", cloned.Version())
 
 		rewriteStart := time.Now()
@@ -695,8 +691,7 @@ func (db *DB) rewriteSnapshotBackground() error {
 
 		ch <- snapshotResult{mtree: mtree}
 		totalElapsed := time.Since(startTime).Seconds()
-		fmt.Printf("[SNAPSHOT REWRITE] Snapshot rewrite process completed in %.1fs (%.1fmin)\n", totalElapsed, totalElapsed/60)
-		cloned.logger.Info("snapshot background process completed", "total_elapsed", totalElapsed)
+		cloned.logger.Info("snapshot rewrite process completed", "duration_sec", totalElapsed, "duration_min", totalElapsed/60)
 		metrics.SeiDBMetrics.SnapshotCreationLatency.Record(
 			context.Background(),
 			totalElapsed,

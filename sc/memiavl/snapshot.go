@@ -391,16 +391,11 @@ func (snapshot *Snapshot) export(callback func(*types.SnapshotNode) bool) {
 }
 
 func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
-	treeName := filepath.Base(snapshotDir)
-	startTime := time.Now()
-
 	// Estimate tree size: root.Size() returns leaf count, total = leaves + branches ≈ 2x
 	treeSize := int64(0)
 	if t.root != nil {
 		treeSize = t.root.Size() * 2 // Total nodes (leaves + branches)
 	}
-
-	fmt.Printf("[SNAPSHOT WRITE] Starting to write snapshot for tree: %s (size: %d nodes)\n", treeName, treeSize)
 
 	// Use 256MB buffer for all trees (large buffer for better performance)
 	bufSize := bufIOSize
@@ -417,12 +412,9 @@ func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
 	})
 
 	if err != nil {
-		fmt.Printf("[SNAPSHOT WRITE] Failed to write snapshot for tree %s: %v\n", treeName, err)
 		return err
 	}
 
-	elapsed := time.Since(startTime).Seconds()
-	fmt.Printf("[SNAPSHOT WRITE] Completed writing snapshot for tree %s in %.1fs\n", treeName, elapsed)
 	return nil
 }
 
@@ -487,57 +479,16 @@ func writeSnapshotWithBuffer(
 	w.totalNodes = totalNodes       // Set total nodes for progress percentage
 	w.traversalStartTime = time.Now()
 
-	writeStart := time.Now()
 	leaves, err := doWrite(w)
 	if err != nil {
 		return err
 	}
-	traversalElapsed := time.Since(writeStart).Seconds()
-
-	treeName := filepath.Base(dir)
-	fmt.Printf("[SNAPSHOT WRITE] Tree %s: traversal completed in %.1fs, waiting for writes to finish...\n",
-		treeName, traversalElapsed)
-
 	// Wait for all pending writes to complete
-	waitStart := time.Now()
 	if err := w.waitForWrites(); err != nil {
 		return err
 	}
-	waitElapsed := time.Since(waitStart).Seconds()
-
-	writeElapsed := time.Since(writeStart).Seconds()
-	totalNodesWritten := int64(w.leafCounter + w.branchCounter)
-	avgNodesPerSec := float64(totalNodesWritten) / traversalElapsed
-	fmt.Printf("[SNAPSHOT WRITE] Tree %s: wrote %d leaves and %d branches in %.1fs (avg: %.0fk nodes/s)\n",
-		treeName, w.leafCounter, w.branchCounter, traversalElapsed, avgNodesPerSec/1000)
-	fmt.Printf("[SNAPSHOT WRITE] Tree %s: traversal: %.1fs, wait: %.1fs, total: %.1fs\n",
-		treeName, traversalElapsed, waitElapsed, writeElapsed)
-
-	// Report pipeline metrics if channels filled >20%
-	maxFillPct := 0.0
-	if w.maxKvFill > 0 {
-		maxFillPct = float64(w.maxKvFill) / float64(nodeChanSize) * 100
-	}
-	if w.maxLeafFill > 0 {
-		leafPct := float64(w.maxLeafFill) / float64(nodeChanSize) * 100
-		if leafPct > maxFillPct {
-			maxFillPct = leafPct
-		}
-	}
-	if w.maxBranchFill > 0 {
-		branchPct := float64(w.maxBranchFill) / float64(nodeChanSize) * 100
-		if branchPct > maxFillPct {
-			maxFillPct = branchPct
-		}
-	}
-
-	if maxFillPct > 20 {
-		fmt.Printf("[PIPELINE] Tree %s: max channel fill %.1f%% - printing details:\n", w.treeName, maxFillPct)
-		w.reportPipelineMetrics()
-	}
 
 	if leaves > 0 {
-		flushStart := time.Now()
 		if err := nodesWriter.Flush(); err != nil {
 			return err
 		}
@@ -556,8 +507,6 @@ func writeSnapshotWithBuffer(
 		if err := fpKVs.Sync(); err != nil {
 			return err
 		}
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed and synced all files in %.1fs\n",
-			treeName, time.Since(flushStart).Seconds())
 	}
 
 	// write metadata
@@ -668,7 +617,6 @@ func SetPipelineBufferSize(size int) {
 		size = 100000 // Maximum to avoid excessive memory usage
 	}
 	nodeChanSize = size
-	fmt.Printf("[PIPELINE] Pipeline buffer size set to %d operations per channel\n", nodeChanSize)
 }
 
 func newSnapshotWriter(ctx context.Context, nodesWriter, leavesWriter, kvsWriter io.Writer) *snapshotWriter {
@@ -813,24 +761,6 @@ func (w *snapshotWriter) writeLeaf(version uint32, key, value, hash []byte) erro
 	atomic.AddInt64(&w.leafFillSum, int64(leafFill))
 	atomic.AddInt64(&w.leafFillCount, 1)
 
-	// Report progress every 30 seconds
-	if time.Since(w.lastProgressReport) >= 30*time.Second {
-		totalProcessed := int64(w.leafCounter + w.branchCounter)
-		elapsed := time.Since(w.traversalStartTime).Seconds()
-		nodesPerSec := float64(totalProcessed) / elapsed
-
-		if w.totalNodes > 0 {
-			percentage := float64(totalProcessed) * 100.0 / float64(w.totalNodes)
-			fmt.Printf("[SNAPSHOT WRITE] Tree %s: %d/%d nodes (%.1f%%) - %.0fk nodes/s\n",
-				w.treeName, totalProcessed, w.totalNodes, percentage, nodesPerSec/1000)
-		} else {
-			fmt.Printf("[SNAPSHOT WRITE] Tree %s: %d nodes - %.0fk nodes/s\n",
-				w.treeName, totalProcessed, nodesPerSec/1000)
-		}
-
-		w.lastProgressReport = time.Now()
-	}
-
 	// Calculate key offset BEFORE sending to KV channel
 	keyOffset := w.kvsOffset
 	keyLen := uint32(len(key))
@@ -942,58 +872,7 @@ func (w *snapshotWriter) writeBranchDirect(version, size uint32, height, preTree
 	return nil
 }
 
-// reportPipelineMetrics reports channel fill statistics for all 3 channels
-func (w *snapshotWriter) reportPipelineMetrics() {
-	kvCount := atomic.LoadInt64(&w.kvFillCount)
-	leafCount := atomic.LoadInt64(&w.leafFillCount)
-	branchCount := atomic.LoadInt64(&w.branchFillCount)
-
-	if kvCount == 0 && leafCount == 0 && branchCount == 0 {
-		return
-	}
-
-	chanCap := float64(cap(w.kvChan))
-
-	// Find the most filled channel
-	maxChannel := ""
-	maxFillPct := 0.0
-
-	if kvCount > 0 {
-		maxKvFillPct := float64(w.maxKvFill) / chanCap * 100
-		if maxKvFillPct > maxFillPct {
-			maxFillPct = maxKvFillPct
-			maxChannel = "KV"
-		}
-	}
-
-	if leafCount > 0 {
-		maxLeafFillPct := float64(w.maxLeafFill) / chanCap * 100
-		if maxLeafFillPct > maxFillPct {
-			maxFillPct = maxLeafFillPct
-			maxChannel = "Leaf"
-		}
-	}
-
-	if branchCount > 0 {
-		maxBranchFillPct := float64(w.maxBranchFill) / chanCap * 100
-		if maxBranchFillPct > maxFillPct {
-			maxFillPct = maxBranchFillPct
-			maxChannel = "Branch"
-		}
-	}
-
-	// Only print if there's a potential bottleneck (>20% fill)
-	if maxFillPct > 80 {
-		fmt.Printf("[PIPELINE] Tree %s: WARNING - %s channel %.1f%% full, writes are bottleneck!\n",
-			w.treeName, maxChannel, maxFillPct)
-	} else if maxFillPct > 20 {
-		fmt.Printf("[PIPELINE] Tree %s: %s channel max %.1f%% full (writes keeping up)\n",
-			w.treeName, maxChannel, maxFillPct)
-	}
-}
-
-// writeRecursive write the node recursively in depth-first post-order,
-// returns `(nodeIndex, err)`.
+// writeRecursive writes the node recursively in depth-first post-order
 func (w *snapshotWriter) writeRecursive(node Node) error {
 	select {
 	case <-w.ctx.Done():
