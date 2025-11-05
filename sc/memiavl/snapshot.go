@@ -538,38 +538,25 @@ func writeSnapshotWithBuffer(
 
 	if leaves > 0 {
 		flushStart := time.Now()
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: starting to flush and drop cache...\n", treeName)
-
 		if err := nodesWriter.Flush(); err != nil {
+			return err
+		}
+		if err := leavesWriter.Flush(); err != nil {
+			return err
+		}
+		if err := kvsWriter.Flush(); err != nil {
 			return err
 		}
 		if err := fpNodes.Sync(); err != nil {
 			return err
 		}
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced nodes in %.1fs\n",
-			treeName, time.Since(flushStart).Seconds())
-
-		leavesStart := time.Now()
-		if err := leavesWriter.Flush(); err != nil {
-			return err
-		}
 		if err := fpLeaves.Sync(); err != nil {
-			return err
-		}
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced leaves in %.1fs\n",
-			treeName, time.Since(leavesStart).Seconds())
-
-		kvsStart := time.Now()
-		if err := kvsWriter.Flush(); err != nil {
 			return err
 		}
 		if err := fpKVs.Sync(); err != nil {
 			return err
 		}
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced kvs in %.1fs\n",
-			treeName, time.Since(kvsStart).Seconds())
-
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: all files flushed+synced in %.1fs total\n",
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed and synced all files in %.1fs\n",
 			treeName, time.Since(flushStart).Seconds())
 	}
 
@@ -649,14 +636,6 @@ type snapshotWriter struct {
 	lastProgressReport     time.Time
 	progressReportInterval time.Duration
 
-	// Performance metrics (sampled to reduce overhead)
-	traversalTime  time.Duration // Time spent traversing
-	writeTime      time.Duration // Time spent writing
-	sampleCounter  uint32        // Counter for sampling
-	sampleInterval uint32        // Sample every N nodes (e.g., 10000)
-	lastSampleTime time.Time     // Last sample timestamp
-	inTraversal    bool          // Currently in traversal phase
-
 	// Pipeline for async writes - separate channels for each file
 	kvChan     chan kvWriteOp
 	leafChan   chan leafWriteOp
@@ -709,10 +688,7 @@ func newSnapshotWriter(ctx context.Context, nodesWriter, leavesWriter, kvsWriter
 		leavesWriter:           leavesWriter,
 		kvWriter:               kvsWriter,
 		lastProgressReport:     now,
-		progressReportInterval: 30 * time.Second, // Report every 30 seconds
-		sampleInterval:         10000,            // Sample every 10000 nodes to reduce overhead
-		lastSampleTime:         now,
-		inTraversal:            true, // Start in traversal phase
+		progressReportInterval: 30 * time.Second,
 		kvChan:                 kvChan,
 		leafChan:               leafChan,
 		branchChan:             branchChan,
@@ -837,38 +813,22 @@ func (w *snapshotWriter) writeLeaf(version uint32, key, value, hash []byte) erro
 	atomic.AddInt64(&w.leafFillSum, int64(leafFill))
 	atomic.AddInt64(&w.leafFillCount, 1)
 
-	// Report progress every 30 seconds (like the old Export/Import version)
+	// Report progress every 30 seconds
 	if time.Since(w.lastProgressReport) >= 30*time.Second {
 		totalProcessed := int64(w.leafCounter + w.branchCounter)
 		elapsed := time.Since(w.traversalStartTime).Seconds()
 		nodesPerSec := float64(totalProcessed) / elapsed
 
-		// Calculate nodes/s in last 30s interval
-		var intervalNodesPerSec float64
-		if w.lastProgressReport.IsZero() {
-			intervalNodesPerSec = nodesPerSec // First report, use average
-		} else {
-			// Use current average as approximation (close enough for progress reporting)
-			intervalNodesPerSec = nodesPerSec
-		}
-
 		if w.totalNodes > 0 {
 			percentage := float64(totalProcessed) * 100.0 / float64(w.totalNodes)
-			fmt.Printf("[SNAPSHOT WRITE] Tree %s: %d/%d nodes (%.1f%%) - %.0fk nodes/s in last 30s\n",
-				w.treeName, totalProcessed, w.totalNodes, percentage, intervalNodesPerSec/1000)
+			fmt.Printf("[SNAPSHOT WRITE] Tree %s: %d/%d nodes (%.1f%%) - %.0fk nodes/s\n",
+				w.treeName, totalProcessed, w.totalNodes, percentage, nodesPerSec/1000)
 		} else {
 			fmt.Printf("[SNAPSHOT WRITE] Tree %s: %d nodes - %.0fk nodes/s\n",
 				w.treeName, totalProcessed, nodesPerSec/1000)
 		}
 
 		w.lastProgressReport = time.Now()
-	}
-
-	// Check for write errors
-	select {
-	case err := <-w.writeErrors:
-		return err
-	default:
 	}
 
 	// Calculate key offset BEFORE sending to KV channel
@@ -940,13 +900,6 @@ func (w *snapshotWriter) writeBranch(version, size uint32, height, preTrees uint
 	}
 	atomic.AddInt64(&w.branchFillSum, int64(branchFill))
 	atomic.AddInt64(&w.branchFillCount, 1)
-
-	// Check for write errors
-	select {
-	case err := <-w.writeErrors:
-		return err
-	default:
-	}
 
 	// Make copy of hash since we're sending to another goroutine
 	hashCopy := make([]byte, len(hash))
@@ -1042,18 +995,6 @@ func (w *snapshotWriter) reportPipelineMetrics() {
 // writeRecursive write the node recursively in depth-first post-order,
 // returns `(nodeIndex, err)`.
 func (w *snapshotWriter) writeRecursive(node Node) error {
-	// Sample performance metrics every N nodes to reduce overhead
-	w.sampleCounter++
-	shouldSample := w.sampleCounter%w.sampleInterval == 0
-
-	if shouldSample && w.inTraversal {
-		// End traversal sample, start write sample
-		now := time.Now()
-		w.traversalTime += now.Sub(w.lastSampleTime)
-		w.lastSampleTime = now
-		w.inTraversal = false
-	}
-
 	select {
 	case <-w.ctx.Done():
 		return w.ctx.Err()
@@ -1087,15 +1028,6 @@ func (w *snapshotWriter) writeRecursive(node Node) error {
 	size := node.Size()
 	if size < 0 || size > math.MaxUint32 {
 		return fmt.Errorf("node size %d out of range", size)
-	}
-
-	// Sample after write
-	if shouldSample && !w.inTraversal {
-		// End write sample, start traversal sample
-		now := time.Now()
-		w.writeTime += now.Sub(w.lastSampleTime)
-		w.lastSampleTime = now
-		w.inTraversal = true
 	}
 
 	return w.writeBranch(node.Version(), uint32(size), node.Height(), preTrees, keyLeaf, node.Hash())
