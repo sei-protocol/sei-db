@@ -38,10 +38,13 @@ const (
 	FileNameMetadata = "metadata"
 )
 
-// monitoringWriter wraps an os.File to track write progress
+// dropFileCache is defined in snapshot_linux.go and snapshot_other.go
+
+// monitoringWriter wraps an os.File to track write progress and optionally drop cache
 type monitoringWriter struct {
-	f       *os.File
-	written int64
+	f         *os.File
+	written   int64
+	dropCache bool // If true, drop write cache after sync to prevent memory pressure
 }
 
 func (w *monitoringWriter) Write(p []byte) (n int, err error) {
@@ -52,6 +55,17 @@ func (w *monitoringWriter) Write(p []byte) (n int, err error) {
 
 	w.written += int64(n)
 	return n, err
+}
+
+// dropCacheAfterSync drops write cache after sync for the entire file
+// This is more reliable than dropping during writes because data is actually on disk
+func (w *monitoringWriter) dropCacheAfterSync() error {
+	if !w.dropCache || w.written == 0 {
+		return nil
+	}
+	fmt.Printf("[CACHE DROP] Dropping %d MB write cache for file\n", w.written/(1024*1024))
+	// Drop cache for the entire file
+	return dropFileCache(int(w.f.Fd()), 0, w.written)
 }
 
 // Snapshot manage the lifecycle of mmap-ed files for the snapshot,
@@ -473,9 +487,22 @@ func writeSnapshotWithBuffer(
 	}()
 
 	// Wrap files with monitoring writers for progress tracking
-	nodesMonitor := &monitoringWriter{f: fpNodes}
-	leavesMonitor := &monitoringWriter{f: fpLeaves}
-	kvsMonitor := &monitoringWriter{f: fpKVs}
+	// Enable write cache drop for EVM tree to prevent memory pressure on 128GB RAM machines
+	treeName := filepath.Base(dir)
+	enableWriteCacheDrop := treeName == "evm"
+
+	nodesMonitor := &monitoringWriter{
+		f:         fpNodes,
+		dropCache: enableWriteCacheDrop,
+	}
+	leavesMonitor := &monitoringWriter{
+		f:         fpLeaves,
+		dropCache: enableWriteCacheDrop,
+	}
+	kvsMonitor := &monitoringWriter{
+		f:         fpKVs,
+		dropCache: enableWriteCacheDrop,
+	}
 
 	// Create buffered writers with large buffers (2GB each for EVM tree)
 	nodesWriter := bufio.NewWriterSize(nodesMonitor, bufSize)
@@ -494,7 +521,6 @@ func writeSnapshotWithBuffer(
 	}
 	traversalElapsed := time.Since(writeStart).Seconds()
 
-	treeName := filepath.Base(dir)
 	fmt.Printf("[SNAPSHOT WRITE] Tree %s: traversal completed in %.1fs, waiting for writes to finish...\n",
 		treeName, traversalElapsed)
 
@@ -556,8 +582,20 @@ func writeSnapshotWithBuffer(
 		if err := fpKVs.Sync(); err != nil {
 			return err
 		}
+
 		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed and synced all files in %.1fs\n",
 			treeName, time.Since(flushStart).Seconds())
+
+		// Drop write cache after sync - this is critical for 128GB RAM machines
+		// Data is now on disk, so we can safely drop cache to prevent memory pressure
+		if enableWriteCacheDrop {
+			dropStart := time.Now()
+			_ = nodesMonitor.dropCacheAfterSync()
+			_ = leavesMonitor.dropCacheAfterSync()
+			_ = kvsMonitor.dropCacheAfterSync()
+			fmt.Printf("[SNAPSHOT WRITE] Tree %s: dropped write cache in %.1fs\n",
+				treeName, time.Since(dropStart).Seconds())
+		}
 	}
 
 	// write metadata

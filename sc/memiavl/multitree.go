@@ -471,11 +471,40 @@ func (t *MultiTree) writeSnapshotPriorityEVM(ctx context.Context, dir string, wp
 		evmElapsed := time.Since(evmStart).Seconds()
 		fmt.Printf("[SNAPSHOT WRITE] Phase 1 completed: EVM tree written in %.1fs\n", evmElapsed)
 		fmt.Printf("[SNAPSHOT WRITE] Progress: 1/%d trees completed\n", len(t.trees))
+
+		// Phase 2a: Drop EVM cache to make room for other trees
+		// This is critical for 128GB RAM: EVM occupied ~80GB, now we can reuse it
+		if evmTree.snapshot != nil {
+			t.logger.Info("dropping evm cache after write to free memory")
+			dropStart := time.Now()
+			_ = evmTree.snapshot.dropCacheHint()
+			t.logger.Info("evm cache drop completed", "duration_sec", time.Since(dropStart).Seconds())
+		}
+
+		// Phase 2b: Prefetch large trees (acc, bank, wasm) for fast writes
+		// Now we have ~80GB free space from dropping EVM
+		fmt.Printf("[SNAPSHOT WRITE] Phase 2a: Prefetching large trees for write\n")
+		prefetchStart2 := time.Now()
+		largeTrees := []string{"acc", "bank", "wasm"}
+		currentSnapshotDir := filepath.Join(filepath.Dir(dir), fmt.Sprintf("snapshot-%020d", t.lastCommitInfo.Version))
+		for _, entry := range otherTrees {
+			// Check if this tree is one of the large trees we want to prefetch
+			for _, largeName := range largeTrees {
+				if entry.Name == largeName && entry.Tree.snapshot != nil {
+					treeSnapshotDir := filepath.Join(currentSnapshotDir, entry.Name)
+					t.logger.Info("prefetching tree for write", "tree", entry.Name)
+					entry.Tree.snapshot.prefetchSnapshotForWrite(treeSnapshotDir)
+					break
+				}
+			}
+		}
+		prefetchElapsed2 := time.Since(prefetchStart2).Seconds()
+		fmt.Printf("[SNAPSHOT WRITE] Phase 2a completed: Prefetch in %.1fs\n", prefetchElapsed2)
 	}
 
-	// Phase 2: Write all other trees in parallel
+	// Phase 2c: Write all other trees in parallel
 	if len(otherTrees) > 0 {
-		fmt.Printf("[SNAPSHOT WRITE] Phase 2: Writing %d remaining trees in parallel\n", len(otherTrees))
+		fmt.Printf("[SNAPSHOT WRITE] Phase 2b: Writing %d remaining trees in parallel\n", len(otherTrees))
 		phase2Start := time.Now()
 
 		group, _ := wp.GroupContext(ctx)
@@ -498,7 +527,7 @@ func (t *MultiTree) writeSnapshotPriorityEVM(ctx context.Context, dir string, wp
 		}
 
 		phase2Elapsed := time.Since(phase2Start).Seconds()
-		fmt.Printf("[SNAPSHOT WRITE] Phase 2 completed: %d trees written in %.1fs\n", len(otherTrees), phase2Elapsed)
+		fmt.Printf("[SNAPSHOT WRITE] Phase 2b completed: %d trees written in %.1fs\n", len(otherTrees), phase2Elapsed)
 	}
 
 	elapsed := time.Since(startTime).Seconds()
