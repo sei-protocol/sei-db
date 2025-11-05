@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/alitto/pond"
@@ -402,7 +403,8 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 }
 
 func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.WorkerPool) error {
-	t.logger.Info("starting snapshot write", "trees", len(t.trees))
+	fmt.Printf("[SNAPSHOT WRITE] Version: Pipeline+PriorityEVM (optimized)\n")
+	fmt.Printf("[SNAPSHOT WRITE] Starting to write %d trees\n", len(t.trees))
 
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil { //nolint:gosec
 		return err
@@ -416,6 +418,7 @@ func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.Work
 // Best strategy: reduces disk I/O contention for the largest tree
 func (t *MultiTree) writeSnapshotPriorityEVM(ctx context.Context, dir string, wp *pond.WorkerPool) error {
 	startTime := time.Now()
+	fmt.Printf("[SNAPSHOT WRITE] Strategy: Priority EVM (EVM first, then parallel)\n")
 
 	// Phase 1: Write EVM tree first (if it exists)
 	var evmTree *Tree
@@ -432,26 +435,33 @@ func (t *MultiTree) writeSnapshotPriorityEVM(ctx context.Context, dir string, wp
 	}
 
 	if evmTree != nil {
-		t.logger.Info("writing evm tree", "phase", "1/2")
+		fmt.Printf("[SNAPSHOT WRITE] Phase 1: Writing EVM tree first (largest tree, 73%% of total data)\n")
 		evmStart := time.Now()
 		if err := evmTree.WriteSnapshot(ctx, filepath.Join(dir, evmName)); err != nil {
 			return err
 		}
 		evmElapsed := time.Since(evmStart).Seconds()
-		t.logger.Info("evm tree completed", "duration_sec", evmElapsed)
+		fmt.Printf("[SNAPSHOT WRITE] Phase 1 completed: EVM tree written in %.1fs\n", evmElapsed)
+		fmt.Printf("[SNAPSHOT WRITE] Progress: 1/%d trees completed\n", len(t.trees))
 	}
 
 	// Phase 2: Write all other trees in parallel
 	if len(otherTrees) > 0 {
-		t.logger.Info("writing remaining trees", "phase", "2/2", "count", len(otherTrees))
+		fmt.Printf("[SNAPSHOT WRITE] Phase 2: Writing %d remaining trees in parallel\n", len(otherTrees))
 		phase2Start := time.Now()
 
 		group, _ := wp.GroupContext(ctx)
+		completed := int32(1) // Start from 1 (EVM already done)
 
 		for _, entry := range otherTrees {
 			tree, name := entry.Tree, entry.Name
 			group.Submit(func() error {
-				return tree.WriteSnapshot(ctx, filepath.Join(dir, name))
+				err := tree.WriteSnapshot(ctx, filepath.Join(dir, name))
+				if err == nil {
+					current := atomic.AddInt32(&completed, 1)
+					fmt.Printf("[SNAPSHOT WRITE] Progress: %d/%d trees completed\n", current, len(t.trees))
+				}
+				return err
 			})
 		}
 
@@ -460,13 +470,14 @@ func (t *MultiTree) writeSnapshotPriorityEVM(ctx context.Context, dir string, wp
 		}
 
 		phase2Elapsed := time.Since(phase2Start).Seconds()
-		t.logger.Info("remaining trees completed", "duration_sec", phase2Elapsed, "count", len(otherTrees))
+		fmt.Printf("[SNAPSHOT WRITE] Phase 2 completed: %d trees written in %.1fs\n", len(otherTrees), phase2Elapsed)
 	}
 
 	elapsed := time.Since(startTime).Seconds()
-	t.logger.Info("all trees completed", "duration_sec", elapsed, "trees", len(t.trees))
+	fmt.Printf("[SNAPSHOT WRITE] All %d trees completed in %.1fs\n", len(t.trees), elapsed)
 
 	// write commit info
+	fmt.Printf("[SNAPSHOT WRITE] Writing metadata file\n")
 	metadata := proto.MultiTreeMetadata{
 		CommitInfo:     &t.lastCommitInfo,
 		InitialVersion: int64(t.initialVersion),
