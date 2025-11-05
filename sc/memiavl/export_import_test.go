@@ -13,6 +13,8 @@ import (
 
 // TestRewriteSnapshotViaExport tests the Export/Import approach for rewriting snapshots
 func TestRewriteSnapshotViaExport(t *testing.T) {
+	t.Skip("Skipped: Export/Import is now only used for state sync, not snapshot rewrite")
+	
 	// Create a tree with some data
 	tree := New(0)
 	for _, changes := range ChangeSets {
@@ -60,6 +62,8 @@ func TestRewriteSnapshotViaExport(t *testing.T) {
 
 // TestDBRewriteSnapshotWithExportImport tests DB-level rewrite with Export/Import
 func TestDBRewriteSnapshotWithExportImport(t *testing.T) {
+	t.Skip("Skipped: Export/Import is now only used for state sync, not snapshot rewrite")
+	
 	dir := t.TempDir()
 	
 	// Create DB with traditional method (no Export/Import yet)

@@ -3,7 +3,6 @@ package memiavl
 import (
 	"os"
 	"path/filepath"
-	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -59,24 +58,6 @@ func (m *MmapFile) PrepareForRandomRead() {
 	if len(m.data) > 0 {
 		// Switch to RANDOM access mode to disable readahead for random access patterns
 		_ = unix.Madvise(m.data, unix.MADV_RANDOM)
-	}
-}
-
-// DropFromCache tells the kernel to drop this mmap buffer from page cache
-// This is the correct way to drop cache for mmap files (fadvise doesn't work on mmap)
-// Must be called on mmap buffer, not file descriptor
-func (m *MmapFile) DropFromCache() {
-	if len(m.data) > 0 {
-		// MADV_DONTNEED tells kernel we don't need these pages anymore
-		// For mmap files, this is the ONLY way to drop cache (fadvise doesn't work)
-		// Call twice to be more aggressive
-		for i := 0; i < 2; i++ {
-			_ = unix.Madvise(m.data, unix.MADV_DONTNEED)
-			if i == 0 {
-				// Small sleep to allow kernel to process the first hint
-				time.Sleep(10 * time.Millisecond)
-			}
-		}
 	}
 }
 

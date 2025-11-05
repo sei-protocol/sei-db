@@ -279,6 +279,31 @@ type stackEntry struct {
 	expanded bool
 }
 
+// Export returns a snapshot of the tree which won't be corrupted by further modifications on the main tree.
+// This is used for state sync - exporting the tree to be sent to other nodes.
+func (t *Tree) Export() *Exporter {
+	if t.snapshot != nil && t.version == t.snapshot.Version() {
+		// snapshot export algorithm is more efficient
+		return t.snapshot.Export()
+	}
+
+	// do normal post-order traversal export
+	return newExporter(func(callback func(node *types.SnapshotNode) bool) {
+		t.ScanPostOrder(func(node Node) bool {
+			height := node.Height()
+			if height > math.MaxInt8 {
+				panic(fmt.Sprintf("node height %d overflows int8", height))
+			}
+			return callback(&types.SnapshotNode{
+				Key:     node.Key(),
+				Value:   node.Value(),
+				Version: int64(node.Version()),
+				Height:  int8(height),
+			})
+		})
+	})
+}
+
 func (t *Tree) Close() error {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()

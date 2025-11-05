@@ -16,20 +16,10 @@ import (
 	"unsafe"
 
 	"github.com/sei-protocol/sei-db/common/logger"
+	"github.com/sei-protocol/sei-db/sc/types"
 	"golang.org/x/sys/unix"
 
 	"github.com/sei-protocol/sei-db/common/errors"
-)
-
-const (
-	// Buffer sizes for I/O (simplified from Export/Import version)
-	bufIOSize      = 256 * 1024 * 1024 // 256MB
-	bufIOSizeLarge = 16 * 1024 * 1024  // 16MB for large trees
-)
-
-var (
-	// Pipeline channel sizes (mutable for testing)
-	nodeChanSize = 10000
 )
 
 const (
@@ -238,6 +228,68 @@ func (snapshot *Snapshot) Close() error {
 	// reset to an empty tree
 	*snapshot = *NewEmptySnapshot(snapshot.version)
 	return errors.Join(errs...)
+}
+
+// Export returns an Exporter for state sync
+func (snapshot *Snapshot) Export() *Exporter {
+	return newExporter(snapshot.export)
+}
+
+// export is the internal implementation that iterates through the snapshot in post-order
+func (snapshot *Snapshot) export(callback func(*types.SnapshotNode) bool) {
+	if snapshot.leavesLen() == 0 {
+		return
+	}
+
+	if snapshot.leavesLen() == 1 {
+		leaf := snapshot.Leaf(0)
+		callback(&types.SnapshotNode{
+			Height:  0,
+			Version: int64(leaf.Version()),
+			Key:     leaf.Key(),
+			Value:   leaf.Value(),
+		})
+		return
+	}
+
+	var pendingTrees int
+	var i, j uint32
+	for ; i < uint32(snapshot.nodesLen()); i++ {
+		// pending branch node
+		node := snapshot.nodesLayout.Node(i)
+		for pendingTrees < int(node.PreTrees())+2 {
+			// add more leaf nodes
+			leaf := snapshot.leavesLayout.Leaf(j)
+			key, value := snapshot.KeyValue(leaf.KeyOffset())
+			enode := &types.SnapshotNode{
+				Height:  0,
+				Version: int64(leaf.Version()),
+				Key:     key,
+				Value:   value,
+			}
+			j++
+			pendingTrees++
+
+			if callback(enode) {
+				return
+			}
+		}
+		hui8 := node.Height()
+		if hui8 > math.MaxInt8 {
+			panic("node height exceeds int8")
+		}
+		height := int8(hui8)
+		enode := &types.SnapshotNode{
+			Height:  height,
+			Version: int64(node.Version()),
+			Key:     snapshot.LeafKey(node.KeyLeaf()),
+		}
+		pendingTrees--
+
+		if callback(enode) {
+			return
+		}
+	}
 }
 
 // IsEmpty returns if the snapshot is an empty tree.
@@ -511,8 +563,7 @@ func writeSnapshotWithBuffer(
 		if err := fpNodes.Sync(); err != nil {
 			return err
 		}
-		dropPageCache(fpNodes)
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced+dropped nodes in %.1fs\n",
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced nodes in %.1fs\n",
 			treeName, time.Since(flushStart).Seconds())
 
 		leavesStart := time.Now()
@@ -522,8 +573,7 @@ func writeSnapshotWithBuffer(
 		if err := fpLeaves.Sync(); err != nil {
 			return err
 		}
-		dropPageCache(fpLeaves)
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced+dropped leaves in %.1fs\n",
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced leaves in %.1fs\n",
 			treeName, time.Since(leavesStart).Seconds())
 
 		kvsStart := time.Now()
@@ -533,11 +583,10 @@ func writeSnapshotWithBuffer(
 		if err := fpKVs.Sync(); err != nil {
 			return err
 		}
-		dropPageCache(fpKVs)
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced+dropped kvs in %.1fs\n",
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed+synced kvs in %.1fs\n",
 			treeName, time.Since(kvsStart).Seconds())
 
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: all files flushed+synced+dropped in %.1fs total\n",
+		fmt.Printf("[SNAPSHOT WRITE] Tree %s: all files flushed+synced in %.1fs total\n",
 			treeName, time.Since(flushStart).Seconds())
 	}
 
