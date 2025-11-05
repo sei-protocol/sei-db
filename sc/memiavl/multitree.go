@@ -436,6 +436,34 @@ func (t *MultiTree) writeSnapshotPriorityEVM(ctx context.Context, dir string, wp
 
 	if evmTree != nil {
 		fmt.Printf("[SNAPSHOT WRITE] Phase 1: Writing EVM tree first (largest tree, 73%% of total data)\n")
+
+		// Phase 1a: Drop other trees' cache to make room for EVM
+		// This is critical for 128GB RAM machines where memory is tight
+		t.logger.Info("dropping cache for non-evm trees", "count", len(otherTrees))
+		dropStart := time.Now()
+		for _, entry := range otherTrees {
+			if entry.Tree.snapshot != nil {
+				// Drop cache for nodes, leaves, kvs
+				_ = entry.Tree.snapshot.dropCacheHint()
+			}
+		}
+		dropElapsed := time.Since(dropStart).Seconds()
+		t.logger.Info("cache drop completed", "duration_sec", dropElapsed)
+
+		// Phase 1b: Prefetch EVM snapshot files for snapshot creation (nodes/leaves/kvs)
+		// This is critical for performance: load all data into page cache before writing
+		t.logger.Info("prefetching evm snapshot for write", "phase", "1/2 - prefetch")
+		prefetchStart := time.Now()
+		if evmTree.snapshot != nil && t.lastCommitInfo.Version > 0 {
+			// Construct the path to the EVM snapshot directory in the current snapshot
+			currentSnapshotDir := filepath.Join(filepath.Dir(dir), fmt.Sprintf("snapshot-%020d", t.lastCommitInfo.Version))
+			evmSnapshotDir := filepath.Join(currentSnapshotDir, evmName)
+			evmTree.snapshot.prefetchSnapshotForWrite(evmSnapshotDir)
+		}
+		prefetchElapsed := time.Since(prefetchStart).Seconds()
+		t.logger.Info("evm prefetch completed", "duration_sec", prefetchElapsed)
+
+		t.logger.Info("writing evm tree", "phase", "1/2 - write")
 		evmStart := time.Now()
 		if err := evmTree.WriteSnapshot(ctx, filepath.Join(dir, evmName)); err != nil {
 			return err

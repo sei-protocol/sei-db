@@ -1040,40 +1040,111 @@ func createFile(name string) (*os.File, error) {
 // prefetchSnapshot sequentially reads snapshot files into page cache
 // This is critical for cold-start performance: eliminates 99% of random I/O during replay
 func (snapshot *Snapshot) prefetchSnapshot(snapshotDir string, prefetchThreshold float64) {
+	snapshot.prefetchSnapshotWithMode(snapshotDir, prefetchThreshold, false)
+}
+
+// prefetchSnapshotForWrite prefetches snapshot for write operation (snapshot creation)
+// Forces loading all files (nodes/leaves/kvs) for EVM without threshold check
+func (snapshot *Snapshot) prefetchSnapshotForWrite(snapshotDir string) {
+	snapshot.prefetchSnapshotWithMode(snapshotDir, 0, true)
+}
+
+// prefetchSnapshotWithMode handles both cold start and snapshot creation prefetch
+// forWrite=true: Force load all files (nodes/leaves/kvs) for snapshot creation, no threshold check
+// forWrite=false: Cold start mode, only load nodes/leaves with threshold check
+func (snapshot *Snapshot) prefetchSnapshotWithMode(snapshotDir string, prefetchThreshold float64, forWrite bool) {
 	startTime := time.Now()
 	if snapshot.nodes == nil && snapshot.leaves == nil {
 		return // Empty snapshot
 	}
-	// Selective preload: only preload large and active trees
-	// Small/inactive trees have minimal I/O during replay, not worth preloading
+
 	treeName := filepath.Base(snapshotDir)
-	needsPreload := shouldPreloadTree(treeName)
-	if !needsPreload {
-		return
-	}
 	log := snapshot.logger
 
-	// If most pages are already in page cache, skip prefetch
-	residentNodes, errNodes := residentRatio(snapshot.nodes)
-	residentLeaves, errLeaves := residentRatio(snapshot.leaves)
-	if errNodes == nil && errLeaves == nil {
-		if residentNodes >= prefetchThreshold && residentLeaves >= prefetchThreshold {
-			log.Debug(fmt.Sprintf("Skipped prefetching for tree %s\n", treeName))
+	// For cold start: selective preload based on tree name
+	// For write: only prefetch if it's EVM (we do EVM first in writeSnapshotPriorityEVM)
+	if forWrite {
+		if treeName != "evm" {
+			return // Only prefetch EVM for snapshot creation
+		}
+		log.Info("Prefetch for snapshot creation", "tree", treeName)
+	} else {
+		// Cold start mode: check if tree should be preloaded
+		needsPreload := shouldPreloadTree(treeName)
+		if !needsPreload {
 			return
+		}
+
+		// Check page cache residency for cold start
+		residentNodes, errNodes := residentRatio(snapshot.nodes)
+		residentLeaves, errLeaves := residentRatio(snapshot.leaves)
+		if errNodes == nil && errLeaves == nil {
+			if residentNodes >= prefetchThreshold && residentLeaves >= prefetchThreshold {
+				log.Debug(fmt.Sprintf("Skipped prefetching for tree %s\n", treeName))
+				return
+			}
+		}
+
+		// Cold start: check threshold before loading
+		if residentNodes < prefetchThreshold {
+			log.Info(fmt.Sprintf("Tree %s nodes page cache residency ratio is %f, below threshold %f\n", treeName, residentNodes, prefetchThreshold))
+			_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameNodes))
+		}
+
+		if residentLeaves < prefetchThreshold {
+			log.Info(fmt.Sprintf("Tree %s leaves page cache residency ratio is %f, below threshold %f\n", treeName, residentLeaves, prefetchThreshold))
+			_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameLeaves))
+		}
+
+		log.Info(fmt.Sprintf("Prefetch snapshot for %s completed in %fs. Consider adding more RAM for page cache to avoid preloading during restart.\n", treeName, time.Since(startTime).Seconds()))
+		return
+	}
+
+	// For snapshot creation (forWrite=true): Force load all files for EVM
+	log.Info("First loading EVM snapshot files for snapshot creation (nodes/leaves/kvs)")
+
+	_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameNodes))
+	log.Info("Prefetch nodes completed for EVM")
+
+	_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameLeaves))
+	log.Info("Prefetch leaves completed for EVM")
+
+	_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameKVs))
+	log.Info("Prefetch kvs completed for EVM")
+
+	log.Info(fmt.Sprintf("Prefetch EVM for snapshot creation completed in %fs\n", time.Since(startTime).Seconds()))
+}
+
+// dropCacheHint hints the kernel to drop page cache for this snapshot's mmap files
+// This is used before prefetching EVM to make room in tight memory situations (128GB RAM)
+func (snapshot *Snapshot) dropCacheHint() error {
+	var errs []error
+
+	// Drop cache for nodes
+	if len(snapshot.nodes) > 0 {
+		if err := unix.Madvise(snapshot.nodes, unix.MADV_DONTNEED); err != nil {
+			errs = append(errs, fmt.Errorf("failed to drop nodes cache: %w", err))
 		}
 	}
 
-	if residentNodes < prefetchThreshold {
-		log.Info(fmt.Sprintf("Tree %s nodes page cache residency ratio is %f, below threshold %f\n", treeName, residentNodes, prefetchThreshold))
-		_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameNodes))
+	// Drop cache for leaves
+	if len(snapshot.leaves) > 0 {
+		if err := unix.Madvise(snapshot.leaves, unix.MADV_DONTNEED); err != nil {
+			errs = append(errs, fmt.Errorf("failed to drop leaves cache: %w", err))
+		}
 	}
 
-	if residentLeaves < prefetchThreshold {
-		log.Info(fmt.Sprintf("Tree %s leaves page cache residency ratio is %f, below threshold %f\n", treeName, residentLeaves, prefetchThreshold))
-		_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameLeaves))
+	// Drop cache for kvs
+	if len(snapshot.kvs) > 0 {
+		if err := unix.Madvise(snapshot.kvs, unix.MADV_DONTNEED); err != nil {
+			errs = append(errs, fmt.Errorf("failed to drop kvs cache: %w", err))
+		}
 	}
 
-	log.Info(fmt.Sprintf("Prefetch snapshot for %s completed in %fs. Consider adding more RAM for page cache to avoid preloading during restart.\n", treeName, time.Since(startTime).Seconds()))
+	if len(errs) > 0 {
+		return fmt.Errorf("cache drop errors: %v", errs)
+	}
+	return nil
 }
 
 // shouldPreloadTree determines if a tree should be preloaded based on size and name
