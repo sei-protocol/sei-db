@@ -410,11 +410,7 @@ func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.Work
 		return err
 	}
 
-	// Use priority EVM strategy: write EVM tree first, then others in parallel
-	// Testing shows this is faster than full parallel because:
-	// 1. EVM tree is 73% of total data - writing it alone avoids disk I/O contention
-	// 2. Other trees can write in parallel after EVM is done
-	// 3. With 1GB buffer, EVM tree writes faster without competition
+	// Write EVM first to avoid disk I/O contention, then parallel
 	return t.writeSnapshotPriorityEVM(ctx, dir, wp)
 }
 

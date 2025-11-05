@@ -557,7 +557,7 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 
 	snapshotDir := snapshotName(db.lastCommitInfo.Version)
 
-	// Check if snapshot already exists - if so, skip rewrite to avoid corrupting active snapshot
+	// Skip if snapshot already exists
 	targetPath := filepath.Join(db.dir, snapshotDir)
 	if _, err := os.Stat(targetPath); err == nil {
 		db.logger.Info("snapshot already exists, skipping rewrite", "snapshot", snapshotDir)
@@ -567,11 +567,8 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 	tmpDir := snapshotDir + "-tmp"
 	path := filepath.Join(db.dir, tmpDir)
 
-	// Pipeline + Recursive Write (simplified approach)
-	// Pipeline parallel writes to 3 files (kvs, leaves, nodes) via channels
-	// This decouples traversal from I/O, achieving 3.3-4x speedup vs baseline
-	fmt.Printf("[REWRITE] Using Pipeline + Recursive Write\n")
-	
+	fmt.Printf("[REWRITE] Using Pipeline Write\n")
+
 	writeStart := time.Now()
 	err := db.MultiTree.WriteSnapshot(ctx, path, db.snapshotWriterPool)
 	writeElapsed := time.Since(writeStart).Seconds()
@@ -622,19 +619,8 @@ func (db *DB) rewriteIfApplicable(height int64) {
 
 	snapshotVersion := db.SnapshotVersion()
 
-	// Add logging to debug the snapshot rewrite trigger logic
-	db.logger.Debug("checking snapshot rewrite condition",
-		"current_height", height,
-		"snapshot_version", snapshotVersion,
-		"interval", db.snapshotInterval,
-		"diff", height-snapshotVersion)
-
 	// create snapshot when current height - last snapshot height > interval
 	if height-snapshotVersion >= int64(db.snapshotInterval) {
-		db.logger.Info("triggering snapshot rewrite",
-			"current_height", height,
-			"snapshot_version", snapshotVersion,
-			"interval", db.snapshotInterval)
 		if err := db.rewriteSnapshotBackground(); err != nil {
 			db.logger.Error("failed to rewrite snapshot in background", "err", err)
 		}
@@ -685,11 +671,9 @@ func (db *DB) rewriteSnapshotBackground() error {
 		cloned.logger.Info("finished rewriting snapshot", "version", cloned.Version(), "elapsed", time.Since(rewriteStart).Seconds())
 
 		loadStart := time.Now()
-		// Create opts for background load with prefetch disabled
-		// Background rewrite should not trigger prefetch to avoid cache interference with main chain
-		// The main chain is actively using the old snapshot, prefetch would evict hot pages
+		// Disable prefetch to avoid cache interference with main chain
 		loadOpts := db.opts
-		loadOpts.PrefetchThreshold = 0 // Disable prefetch - new snapshot already in cache from rewrite
+		loadOpts.PrefetchThreshold = 0
 		mtree, err := LoadMultiTree(currentPath(cloned.dir), loadOpts)
 		if err != nil {
 			cloned.logger.Error("failed to load multitree after snapshot", "error", err)

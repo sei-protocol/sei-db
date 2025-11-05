@@ -51,12 +51,6 @@ func (w *monitoringWriter) Write(p []byte) (n int, err error) {
 	}
 
 	w.written += int64(n)
-
-	// Log progress every 256MB
-	if w.written%(256*1024*1024) < int64(n) {
-		fmt.Printf("[WRITE] %s: %dMB written\n", w.f.Name(), w.written/(1024*1024))
-	}
-
 	return n, err
 }
 
@@ -408,8 +402,7 @@ func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
 
 	fmt.Printf("[SNAPSHOT WRITE] Starting to write snapshot for tree: %s (size: %d nodes)\n", treeName, treeSize)
 
-	// Choose buffer size based on tree size
-	// Large trees (>100M nodes, ~50GB) use larger buffer to reduce flush overhead
+	// Use large buffer for trees >100M nodes
 	bufSize := bufIOSize
 	if treeSize > 100_000_000 {
 		bufSize = bufIOSizeLarge
@@ -524,7 +517,7 @@ func writeSnapshotWithBuffer(
 	fmt.Printf("[SNAPSHOT WRITE] Tree %s: traversal: %.1fs, wait: %.1fs, total: %.1fs\n",
 		treeName, traversalElapsed, waitElapsed, writeElapsed)
 
-	// Report final pipeline metrics only if there were bottlenecks
+	// Report pipeline metrics if channels filled >20%
 	maxFillPct := 0.0
 	if w.maxKvFill > 0 {
 		maxFillPct = float64(w.maxKvFill) / float64(nodeChanSize) * 100
@@ -542,27 +535,14 @@ func writeSnapshotWithBuffer(
 		}
 	}
 
-	// Only print detailed metrics if channels filled >20% (potential bottleneck)
 	if maxFillPct > 20 {
 		fmt.Printf("[PIPELINE] Tree %s: max channel fill %.1f%% - printing details:\n", w.treeName, maxFillPct)
 		w.reportPipelineMetrics()
 	}
 
-	// Note: Removed misleading sampled metrics
-	// The "traversal/write" timing was measured in the main goroutine only
-	// Real write performance is in the 3 background goroutines (not measured by sampling)
-	// Use pipeline metrics (channel fill %) to identify bottlenecks instead
-
 	if leaves > 0 {
 		flushStart := time.Now()
 		fmt.Printf("[SNAPSHOT WRITE] Tree %s: starting to flush and drop cache...\n", treeName)
-
-		// Flush + Sync + Drop cache for each file immediately
-		// This prevents write data from accumulating in page cache
-		// NOTE: We always drop cache here (even in background mode) to:
-		// 1. Avoid cache overflow (new 81GB EVM could evict old snapshots)
-		// 2. Keep cache available for reading old snapshots during Phase 4
-		// The LoadMultiTree uses mmap (doesn't need data in cache) + prefetch disabled
 
 		if err := nodesWriter.Flush(); err != nil {
 			return err
@@ -1083,8 +1063,6 @@ func (w *snapshotWriter) writeRecursive(node Node) error {
 		return w.ctx.Err()
 	default:
 	}
-
-	// Progress reporting moved to writeLeaf() for better accuracy
 
 	if node.IsLeaf() {
 		return w.writeLeaf(node.Version(), node.Key(), node.Value(), node.Hash())
