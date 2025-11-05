@@ -556,11 +556,27 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 	}
 
 	snapshotDir := snapshotName(db.lastCommitInfo.Version)
+
+	// Skip if snapshot already exists
+	targetPath := filepath.Join(db.dir, snapshotDir)
+	if _, err := os.Stat(targetPath); err == nil {
+		db.logger.Info("snapshot already exists, skipping rewrite", "snapshot", snapshotDir)
+		return nil
+	}
+
 	tmpDir := snapshotDir + "-tmp"
 	path := filepath.Join(db.dir, tmpDir)
-	if err := db.MultiTree.WriteSnapshot(ctx, path, db.snapshotWriterPool); err != nil {
+
+	writeStart := time.Now()
+	err := db.MultiTree.WriteSnapshot(ctx, path, db.snapshotWriterPool)
+	writeElapsed := time.Since(writeStart).Seconds()
+
+	if err != nil {
 		return errorutils.Join(err, os.RemoveAll(path))
 	}
+
+	db.logger.Info("snapshot rewrite completed", "duration_sec", writeElapsed)
+
 	if err := os.Rename(path, filepath.Join(db.dir, snapshotDir)); err != nil {
 		return err
 	}
@@ -600,8 +616,10 @@ func (db *DB) rewriteIfApplicable(height int64) {
 		return
 	}
 
+	snapshotVersion := db.SnapshotVersion()
+
 	// create snapshot when current height - last snapshot height > interval
-	if height-db.SnapshotVersion() >= int64(db.snapshotInterval) {
+	if height-snapshotVersion >= int64(db.snapshotInterval) {
 		if err := db.rewriteSnapshotBackground(); err != nil {
 			db.logger.Error("failed to rewrite snapshot in background", "err", err)
 		}
@@ -641,28 +659,42 @@ func (db *DB) rewriteSnapshotBackground() error {
 		defer close(ch)
 		startTime := time.Now()
 		cloned.logger.Info("start rewriting snapshot", "version", cloned.Version())
+
+		rewriteStart := time.Now()
 		if err := cloned.RewriteSnapshot(ctx); err != nil {
+			cloned.logger.Error("failed to rewrite snapshot", "error", err, "elapsed", time.Since(rewriteStart).Seconds())
 			ch <- snapshotResult{err: err}
 			return
 		}
-		cloned.logger.Info("finished rewriting snapshot", "version", cloned.Version())
-		mtree, err := LoadMultiTree(currentPath(cloned.dir), db.opts)
+		cloned.logger.Info("finished rewriting snapshot", "version", cloned.Version(), "elapsed", time.Since(rewriteStart).Seconds())
+
+		loadStart := time.Now()
+		// Disable prefetch to avoid cache interference with main chain
+		loadOpts := db.opts
+		loadOpts.PrefetchThreshold = 0
+		mtree, err := LoadMultiTree(currentPath(cloned.dir), loadOpts)
 		if err != nil {
+			cloned.logger.Error("failed to load multitree after snapshot", "error", err)
 			ch <- snapshotResult{err: err}
 			return
 		}
+		cloned.logger.Info("loaded multitree after snapshot", "elapsed", time.Since(loadStart).Seconds())
 
 		// do a best effort catch-up, will do another final catch-up in main thread.
+		catchupStart := time.Now()
 		if err := mtree.Catchup(db.streamHandler, 0); err != nil {
+			cloned.logger.Error("failed to catchup after snapshot", "error", err)
 			ch <- snapshotResult{err: err}
 			return
 		}
+		cloned.logger.Info("finished best-effort catchup", "version", cloned.Version(), "latest", mtree.Version(), "elapsed", time.Since(catchupStart).Seconds())
 
-		cloned.logger.Info("finished best-effort catchup", "version", cloned.Version(), "latest", mtree.Version())
 		ch <- snapshotResult{mtree: mtree}
+		totalElapsed := time.Since(startTime).Seconds()
+		cloned.logger.Info("snapshot rewrite process completed", "duration_sec", totalElapsed, "duration_min", totalElapsed/60)
 		metrics.SeiDBMetrics.SnapshotCreationLatency.Record(
 			context.Background(),
-			time.Since(startTime).Seconds(),
+			totalElapsed,
 		)
 	}()
 
