@@ -19,7 +19,17 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/sei-protocol/sei-db/common/errors"
-	"github.com/sei-protocol/sei-db/sc/types"
+)
+
+const (
+	// Buffer sizes for I/O (simplified from Export/Import version)
+	bufIOSize      = 256 * 1024 * 1024 // 256MB
+	bufIOSizeLarge = 16 * 1024 * 1024  // 16MB for large trees
+)
+
+var (
+	// Pipeline channel sizes (mutable for testing)
+	nodeChanSize = 10000
 )
 
 const (
@@ -334,68 +344,6 @@ func (snapshot *Snapshot) LeafKeyValue(index uint32) ([]byte, []byte) {
 	return key, snapshot.kvs[offset : offset+length]
 }
 
-// Export exports the nodes from snapshot file sequentially, more efficient than a post-order traversal.
-func (snapshot *Snapshot) Export() *Exporter {
-	return newExporter(snapshot.export)
-}
-
-func (snapshot *Snapshot) export(callback func(*types.SnapshotNode) bool) {
-	if snapshot.leavesLen() == 0 {
-		return
-	}
-
-	if snapshot.leavesLen() == 1 {
-		leaf := snapshot.Leaf(0)
-		callback(&types.SnapshotNode{
-			Height:  0,
-			Version: int64(leaf.Version()),
-			Key:     leaf.Key(),
-			Value:   leaf.Value(),
-		})
-		return
-	}
-
-	var pendingTrees int
-	var i, j uint32
-	for ; i < uint32(snapshot.nodesLen()); i++ { //nolint:gosec
-		// pending branch node
-		node := snapshot.nodesLayout.Node(i)
-		for pendingTrees < int(node.PreTrees())+2 {
-			// add more leaf nodes
-			leaf := snapshot.leavesLayout.Leaf(j)
-			key, value := snapshot.KeyValue(leaf.KeyOffset())
-			enode := &types.SnapshotNode{
-				Height:  0,
-				Version: int64(leaf.Version()),
-				Key:     key,
-				Value:   value,
-			}
-			j++
-			pendingTrees++
-
-			if callback(enode) {
-				return
-			}
-		}
-		hui8 := node.Height()
-		if hui8 > math.MaxInt8 {
-			panic("node height exceeds int8")
-		}
-		height := int8(hui8)
-		enode := &types.SnapshotNode{
-			Height:  height,
-			Version: int64(node.Version()),
-			Key:     snapshot.LeafKey(node.KeyLeaf()),
-		}
-		pendingTrees--
-
-		if callback(enode) {
-			return
-		}
-	}
-}
-
-// WriteSnapshot save the IAVL tree to a new snapshot directory.
 func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
 	treeName := filepath.Base(snapshotDir)
 	startTime := time.Now()
