@@ -63,8 +63,6 @@ func (opts *Options) FillDefaults() {
 	}
 
 	if opts.SnapshotWriterLimit <= 0 {
-		// Use CPU count as default - allows all trees to start immediately
-		// OS will handle I/O scheduling efficiently
 		opts.SnapshotWriterLimit = runtime.NumCPU()
 	}
 

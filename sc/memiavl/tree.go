@@ -280,7 +280,6 @@ type stackEntry struct {
 }
 
 // Export returns a snapshot of the tree which won't be corrupted by further modifications on the main tree.
-// This is used for state sync - exporting the tree to be sent to other nodes.
 func (t *Tree) Export() *Exporter {
 	if t.snapshot != nil && t.version == t.snapshot.Version() {
 		// snapshot export algorithm is more efficient
@@ -374,4 +373,3 @@ func (t *Tree) GetProof(key []byte) *ics23.CommitmentProof {
 	return commitmentProof
 
 }
-

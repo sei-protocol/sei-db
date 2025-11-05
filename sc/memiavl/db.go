@@ -572,11 +572,13 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 	writeStart := time.Now()
 	err := db.MultiTree.WriteSnapshot(ctx, path, db.snapshotWriterPool)
 	writeElapsed := time.Since(writeStart).Seconds()
-	fmt.Printf("[REWRITE] Write completed in %.1fs (%.1fmin)\n", writeElapsed, writeElapsed/60)
 
 	if err != nil {
+		fmt.Printf("[REWRITE] Write failed after %.1fs: %v\n", writeElapsed, err)
 		return errorutils.Join(err, os.RemoveAll(path))
 	}
+
+	fmt.Printf("[REWRITE] Write completed in %.1fs (%.1fmin)\n", writeElapsed, writeElapsed/60)
 
 	if err := os.Rename(path, filepath.Join(db.dir, snapshotDir)); err != nil {
 		return err

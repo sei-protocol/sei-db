@@ -25,7 +25,6 @@ func TestRewriteSnapshot(t *testing.T) {
 		InitialStores:   []string{"test"},
 	})
 	require.NoError(t, err)
-	// Using recursive traversal (Export/Import removed)
 
 	for i, changes := range ChangeSets {
 		cs := []*proto.NamedChangeSet{
@@ -99,7 +98,6 @@ func TestRewriteSnapshotBackground(t *testing.T) {
 		SnapshotKeepRecent: 0, // only a single snapshot is kept
 	})
 	require.NoError(t, err)
-	// Using recursive traversal (Export/Import removed)
 
 	// spin up goroutine to keep querying the tree
 	stopped := false

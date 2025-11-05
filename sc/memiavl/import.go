@@ -12,31 +12,12 @@ import (
 )
 
 var (
-	// Pipeline buffer size - controls how many operations can be queued
-	// Larger values allow more parallelism between traversal and writes
-	// Increased to 2000000 to prevent channel saturation (was seeing 82.8% fill)
-	// Memory usage: ~2000000 * (avg_op_size ~120 bytes) * 3 channels = ~720MB
-	// This allows ~0.4% of EVM tree (512M nodes) to buffer, preventing bottleneck
-	// Trade-off: 720MB memory for preventing write goroutines from blocking traversal
+	// Pipeline channel size - controls how many operations can be queued
+	// Larger = more parallelism, but more memory (2M ops * 120 bytes * 3 channels = ~720MB)
 	nodeChanSize = 2000000
 
-	// Increased from 64MB to 256MB for better write performance
-	// Larger buffer reduces system calls and improves throughput
-	// For EVM tree (81GB), this reduces flush count from 633 to 316
+	// bufio.Writer buffer size - 256MB reduces system calls and improves throughput
 	bufIOSize = 256 * 1024 * 1024
-
-	// Buffer size for large trees with aggressive cache dropping
-	// Smaller buffer = more frequent flush = more frequent cache drop
-	// Trade-off analysis:
-	//   - 256MB buffer: rare flush (every 256MB) → write data accumulates in cache → read speed degrades
-	//   - 64MB buffer: frequent flush (every 64MB) → write data still accumulates → read speed still degrades
-	//   - 16MB buffer: very frequent flush (every 16MB) → immediate cache drop → read speed stays high
-	// With cacheDropWriter: smaller is better for maintaining read cache
-	// 16MB × 3 files = 48MB memory, minimal overhead
-	// At 1000k nodes/s, 16MB = ~1.5 seconds of writes, very responsive cache dropping
-	// Critical: When EVM (81GB) is writing, we need to prevent ANY accumulation in cache
-	//           to keep bank+acc (35GB) prefetch data hot for Phase 4
-	bufIOSizeLarge = 16 * 1024 * 1024 // 16MB
 )
 
 type MultiTreeImporter struct {

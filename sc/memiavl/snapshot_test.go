@@ -2,10 +2,13 @@ package memiavl
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	errorutils "github.com/sei-protocol/sei-db/common/errors"
 	"github.com/sei-protocol/sei-db/common/logger"
 	"github.com/sei-protocol/sei-db/proto"
+	"github.com/sei-protocol/sei-db/sc/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,45 +55,42 @@ func TestSnapshotEncodingRoundTrip(t *testing.T) {
 }
 
 func TestSnapshotExport(t *testing.T) {
-	// Export/Import removed - test disabled
-	t.Skip("Export functionality removed, test disabled")
+	expNodes := []*types.SnapshotNode{
+		{Key: []byte("hello"), Value: []byte("world1"), Version: 2, Height: 0},
+		{Key: []byte("hello1"), Value: []byte("world1"), Version: 2, Height: 0},
+		{Key: []byte("hello1"), Value: nil, Version: 3, Height: 1},
+		{Key: []byte("hello2"), Value: []byte("world1"), Version: 3, Height: 0},
+		{Key: []byte("hello3"), Value: []byte("world1"), Version: 3, Height: 0},
+		{Key: []byte("hello3"), Value: nil, Version: 3, Height: 1},
+		{Key: []byte("hello2"), Value: nil, Version: 3, Height: 2},
+	}
 
-	// expNodes := []*types.SnapshotNode{
-	// 	{Key: []byte("hello"), Value: []byte("world1"), Version: 2, Height: 0},
-	// 	{Key: []byte("hello1"), Value: []byte("world1"), Version: 2, Height: 0},
-	// 	{Key: []byte("hello1"), Value: nil, Version: 3, Height: 1},
-	// 	{Key: []byte("hello2"), Value: []byte("world1"), Version: 3, Height: 0},
-	// 	{Key: []byte("hello3"), Value: []byte("world1"), Version: 3, Height: 0},
-	// 	{Key: []byte("hello3"), Value: nil, Version: 3, Height: 1},
-	// 	{Key: []byte("hello2"), Value: nil, Version: 3, Height: 2},
-	// }
+	// setup test tree
+	tree := New(0)
+	for _, changes := range ChangeSets[:3] {
+		tree.ApplyChangeSet(changes)
+		_, _, err := tree.SaveVersion(true)
+		require.NoError(t, err)
+	}
 
-	// // setup test tree
-	// tree := New(0)
-	// for _, changes := range ChangeSets[:3] {
-	// 	tree.ApplyChangeSet(changes)
-	// 	_, _, err := tree.SaveVersion(true)
-	// 	require.NoError(t, err)
-	// }
-	//
-	// snapshotDir := t.TempDir()
-	// require.NoError(t, tree.WriteSnapshot(context.Background(), snapshotDir))
+	snapshotDir := t.TempDir()
+	require.NoError(t, tree.WriteSnapshot(context.Background(), snapshotDir))
 
-	// snapshot, err := OpenSnapshot(snapshotDir, Options{})
-	// require.NoError(t, err)
-	//
-	// var nodes []*types.SnapshotNode
-	// exporter := snapshot.Export()
-	// for {
-	// 	node, err := exporter.Next()
-	// 	if errors.Is(err, errorutils.ErrorExportDone) {
-	// 		break
-	// 	}
-	// 	require.NoError(t, err)
-	// 	nodes = append(nodes, node)
-	// }
-	//
-	// require.Equal(t, expNodes, nodes)
+	snapshot, err := OpenSnapshot(snapshotDir, Options{})
+	require.NoError(t, err)
+
+	var nodes []*types.SnapshotNode
+	exporter := snapshot.Export()
+	for {
+		node, err := exporter.Next()
+		if errors.Is(err, errorutils.ErrorExportDone) {
+			break
+		}
+		require.NoError(t, err)
+		nodes = append(nodes, node)
+	}
+
+	require.Equal(t, expNodes, nodes)
 }
 
 func TestSnapshotImportExport(t *testing.T) {
@@ -106,41 +106,38 @@ func TestSnapshotImportExport(t *testing.T) {
 
 	snapshotDir := t.TempDir()
 	require.NoError(t, tree.WriteSnapshot(context.Background(), snapshotDir))
-	
-	// Export/Import removed - test disabled
-	t.Skip("Export/Import functionality removed, test disabled")
-	
-	// snapshot, err := OpenSnapshot(snapshotDir, opts)
-	// require.NoError(t, err)
+	snapshot, err := OpenSnapshot(snapshotDir, opts)
+	require.NoError(t, err)
 
-	// ch := make(chan *types.SnapshotNode)
-	//
-	// go func() {
-	// 	defer close(ch)
-	// 	exporter := snapshot.Export()
-	// 	for {
-	// 		node, err := exporter.Next()
-	// 		if err == errorutils.ErrorExportDone {
-	// 			break
-	// 		}
-	// 		require.NoError(t, err)
-	// 		ch <- node
-	// 	}
-	// }()
-	//
-	// snapshotDir2 := t.TempDir()
-	// err = doImport(context.Background(), snapshotDir2, tree.Version(), ch)
-	// require.NoError(t, err)
-	//
-	// snapshot2, err := OpenSnapshot(snapshotDir2, opts)
-	// require.NoError(t, err)
-	// require.Equal(t, snapshot.RootNode().Hash(), snapshot2.RootNode().Hash())
-	//
-	// // verify all the node hashes in snapshot
-	// for i := 0; i < snapshot2.nodesLen(); i++ {
-	// 	node := snapshot2.Node(uint32(i))
-	// 	require.Equal(t, node.Hash(), HashNode(node))
-	// }
+	ch := make(chan *types.SnapshotNode)
+
+	go func() {
+		defer close(ch)
+
+		exporter := snapshot.Export()
+		for {
+			node, err := exporter.Next()
+			if err == errorutils.ErrorExportDone {
+				break
+			}
+			require.NoError(t, err)
+			ch <- node
+		}
+	}()
+
+	snapshotDir2 := t.TempDir()
+	err = doImport(context.Background(), snapshotDir2, tree.Version(), ch)
+	require.NoError(t, err)
+
+	snapshot2, err := OpenSnapshot(snapshotDir2, opts)
+	require.NoError(t, err)
+	require.Equal(t, snapshot.RootNode().Hash(), snapshot2.RootNode().Hash())
+
+	// verify all the node hashes in snapshot
+	for i := 0; i < snapshot2.nodesLen(); i++ {
+		node := snapshot2.Node(uint32(i))
+		require.Equal(t, node.Hash(), HashNode(node))
+	}
 }
 
 func TestDBSnapshotRestore(t *testing.T) {
@@ -176,33 +173,30 @@ func TestDBSnapshotRestore(t *testing.T) {
 }
 
 func testSnapshotRoundTrip(t *testing.T, db *DB) {
-	// Export/Import removed - test disabled
-	t.Skip("Export/Import functionality removed, test disabled")
-	
-	// exporter, err := NewMultiTreeExporter(db.dir, uint32(db.Version()), false)
-	// require.NoError(t, err)
+	exporter, err := NewMultiTreeExporter(db.dir, uint32(db.Version()), false)
+	require.NoError(t, err)
 
-	// restoreDir := t.TempDir()
-	// importer, err := NewMultiTreeImporter(restoreDir, uint64(db.Version()))
-	// require.NoError(t, err)
+	restoreDir := t.TempDir()
+	importer, err := NewMultiTreeImporter(restoreDir, uint64(db.Version()))
+	require.NoError(t, err)
 
-	// for {
-	// 	item, err := exporter.Next()
-	// 	if err == errorutils.ErrorExportDone {
-	// 		break
-	// 	}
-	// 	require.NoError(t, err)
-	// 	require.NoError(t, importer.Add(item))
-	// }
+	for {
+		item, err := exporter.Next()
+		if err == errorutils.ErrorExportDone {
+			break
+		}
+		require.NoError(t, err)
+		require.NoError(t, importer.Add(item))
+	}
 
-	// require.NoError(t, importer.Close())
-	// require.NoError(t, exporter.Close())
+	require.NoError(t, importer.Close())
+	require.NoError(t, exporter.Close())
 
-	// db2, err := OpenDB(logger.NewNopLogger(), 0, Options{Dir: restoreDir})
-	// require.NoError(t, err)
-	// require.Equal(t, db.LastCommitInfo(), db2.LastCommitInfo())
+	db2, err := OpenDB(logger.NewNopLogger(), 0, Options{Dir: restoreDir})
+	require.NoError(t, err)
+	require.Equal(t, db.LastCommitInfo(), db2.LastCommitInfo())
 
-	// // the imported db function normally
-	// _, err = db2.Commit()
-	// require.NoError(t, err)
+	// the imported db function normally
+	_, err = db2.Commit()
+	require.NoError(t, err)
 }

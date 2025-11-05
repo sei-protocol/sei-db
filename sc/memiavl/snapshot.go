@@ -224,68 +224,6 @@ func (snapshot *Snapshot) Close() error {
 	return errors.Join(errs...)
 }
 
-// Export returns an Exporter for state sync
-func (snapshot *Snapshot) Export() *Exporter {
-	return newExporter(snapshot.export)
-}
-
-// export is the internal implementation that iterates through the snapshot in post-order
-func (snapshot *Snapshot) export(callback func(*types.SnapshotNode) bool) {
-	if snapshot.leavesLen() == 0 {
-		return
-	}
-
-	if snapshot.leavesLen() == 1 {
-		leaf := snapshot.Leaf(0)
-		callback(&types.SnapshotNode{
-			Height:  0,
-			Version: int64(leaf.Version()),
-			Key:     leaf.Key(),
-			Value:   leaf.Value(),
-		})
-		return
-	}
-
-	var pendingTrees int
-	var i, j uint32
-	for ; i < uint32(snapshot.nodesLen()); i++ {
-		// pending branch node
-		node := snapshot.nodesLayout.Node(i)
-		for pendingTrees < int(node.PreTrees())+2 {
-			// add more leaf nodes
-			leaf := snapshot.leavesLayout.Leaf(j)
-			key, value := snapshot.KeyValue(leaf.KeyOffset())
-			enode := &types.SnapshotNode{
-				Height:  0,
-				Version: int64(leaf.Version()),
-				Key:     key,
-				Value:   value,
-			}
-			j++
-			pendingTrees++
-
-			if callback(enode) {
-				return
-			}
-		}
-		hui8 := node.Height()
-		if hui8 > math.MaxInt8 {
-			panic("node height exceeds int8")
-		}
-		height := int8(hui8)
-		enode := &types.SnapshotNode{
-			Height:  height,
-			Version: int64(node.Version()),
-			Key:     snapshot.LeafKey(node.KeyLeaf()),
-		}
-		pendingTrees--
-
-		if callback(enode) {
-			return
-		}
-	}
-}
-
 // IsEmpty returns if the snapshot is an empty tree.
 func (snapshot *Snapshot) IsEmpty() bool {
 	return snapshot.root == nil
@@ -390,24 +328,82 @@ func (snapshot *Snapshot) LeafKeyValue(index uint32) ([]byte, []byte) {
 	return key, snapshot.kvs[offset : offset+length]
 }
 
+// Export returns an Exporter for state sync
+func (snapshot *Snapshot) Export() *Exporter {
+	return newExporter(snapshot.export)
+}
+
+// export is the internal implementation that iterates through the snapshot in post-order
+func (snapshot *Snapshot) export(callback func(*types.SnapshotNode) bool) {
+	if snapshot.leavesLen() == 0 {
+		return
+	}
+
+	if snapshot.leavesLen() == 1 {
+		leaf := snapshot.Leaf(0)
+		callback(&types.SnapshotNode{
+			Height:  0,
+			Version: int64(leaf.Version()),
+			Key:     leaf.Key(),
+			Value:   leaf.Value(),
+		})
+		return
+	}
+
+	var pendingTrees int
+	var i, j uint32
+	for ; i < uint32(snapshot.nodesLen()); i++ {
+		// pending branch node
+		node := snapshot.nodesLayout.Node(i)
+		for pendingTrees < int(node.PreTrees())+2 {
+			// add more leaf nodes
+			leaf := snapshot.leavesLayout.Leaf(j)
+			key, value := snapshot.KeyValue(leaf.KeyOffset())
+			enode := &types.SnapshotNode{
+				Height:  0,
+				Version: int64(leaf.Version()),
+				Key:     key,
+				Value:   value,
+			}
+			j++
+			pendingTrees++
+
+			if callback(enode) {
+				return
+			}
+		}
+		hui8 := node.Height()
+		if hui8 > math.MaxInt8 {
+			panic("node height exceeds int8")
+		}
+		height := int8(hui8)
+		enode := &types.SnapshotNode{
+			Height:  height,
+			Version: int64(node.Version()),
+			Key:     snapshot.LeafKey(node.KeyLeaf()),
+		}
+		pendingTrees--
+
+		if callback(enode) {
+			return
+		}
+	}
+}
+
 func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
 	treeName := filepath.Base(snapshotDir)
 	startTime := time.Now()
 
-	// Estimate tree size based on node count
+	// Estimate tree size: root.Size() returns leaf count, total = leaves + branches ≈ 2x
 	treeSize := int64(0)
 	if t.root != nil {
-		treeSize = t.root.Size()
+		treeSize = t.root.Size() * 2 // Total nodes (leaves + branches)
 	}
 
 	fmt.Printf("[SNAPSHOT WRITE] Starting to write snapshot for tree: %s (size: %d nodes)\n", treeName, treeSize)
 
-	// Use large buffer for trees >100M nodes
+	// Use 256MB buffer for all trees (large buffer for better performance)
 	bufSize := bufIOSize
-	if treeSize > 100_000_000 {
-		bufSize = bufIOSizeLarge
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: using large buffer (%dMB) for better performance\n", treeName, bufIOSizeLarge/(1024*1024))
-	}
 
 	err := writeSnapshotWithBuffer(ctx, snapshotDir, t.version, bufSize, treeSize, func(w *snapshotWriter) (uint32, error) {
 		if t.root == nil {
