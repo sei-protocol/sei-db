@@ -416,7 +416,7 @@ func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
 		fmt.Printf("[SNAPSHOT WRITE] Tree %s: using large buffer (%dMB) for better performance\n", treeName, bufIOSizeLarge/(1024*1024))
 	}
 
-	err := writeSnapshotWithBuffer(ctx, snapshotDir, t.version, bufSize, func(w *snapshotWriter) (uint32, error) {
+	err := writeSnapshotWithBuffer(ctx, snapshotDir, t.version, bufSize, treeSize, func(w *snapshotWriter) (uint32, error) {
 		if t.root == nil {
 			return 0, nil
 		}
@@ -442,6 +442,7 @@ func writeSnapshotWithBuffer(
 	ctx context.Context,
 	dir string, version uint32,
 	bufSize int,
+	totalNodes int64,
 	doWrite func(*snapshotWriter) (uint32, error),
 ) (returnErr error) {
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil { //nolint:gosec
@@ -494,6 +495,8 @@ func writeSnapshotWithBuffer(
 
 	w := newSnapshotWriter(ctx, nodesWriter, leavesWriter, kvsWriter)
 	w.treeName = filepath.Base(dir) // Set tree name for progress reporting
+	w.totalNodes = totalNodes       // Set total nodes for progress percentage
+	w.traversalStartTime = time.Now()
 
 	writeStart := time.Now()
 	leaves, err := doWrite(w)
@@ -514,8 +517,12 @@ func writeSnapshotWithBuffer(
 	waitElapsed := time.Since(waitStart).Seconds()
 
 	writeElapsed := time.Since(writeStart).Seconds()
-	fmt.Printf("[SNAPSHOT WRITE] Tree %s: wrote %d leaves and %d branches in %.1fs (traversal: %.1fs, wait: %.1fs)\n",
-		treeName, w.leafCounter, w.branchCounter, writeElapsed, traversalElapsed, waitElapsed)
+	totalNodesWritten := int64(w.leafCounter + w.branchCounter)
+	avgNodesPerSec := float64(totalNodesWritten) / traversalElapsed
+	fmt.Printf("[SNAPSHOT WRITE] Tree %s: wrote %d leaves and %d branches in %.1fs (avg: %.0fk nodes/s)\n",
+		treeName, w.leafCounter, w.branchCounter, traversalElapsed, avgNodesPerSec/1000)
+	fmt.Printf("[SNAPSHOT WRITE] Tree %s: traversal: %.1fs, wait: %.1fs, total: %.1fs\n",
+		treeName, traversalElapsed, waitElapsed, writeElapsed)
 
 	// Report final pipeline metrics only if there were bottlenecks
 	maxFillPct := 0.0
@@ -620,7 +627,7 @@ func writeSnapshot(
 	dir string, version uint32,
 	doWrite func(*snapshotWriter) (uint32, error),
 ) error {
-	return writeSnapshotWithBuffer(ctx, dir, version, bufIOSize, doWrite)
+	return writeSnapshotWithBuffer(ctx, dir, version, bufIOSize, 0, doWrite)
 }
 
 // kvWriteOp represents a key-value write operation
@@ -661,6 +668,8 @@ type snapshotWriter struct {
 
 	// for progress reporting
 	treeName               string
+	totalNodes             int64 // Total nodes to write (for progress percentage)
+	traversalStartTime     time.Time
 	lastProgressReport     time.Time
 	progressReportInterval time.Duration
 
@@ -852,16 +861,31 @@ func (w *snapshotWriter) writeLeaf(version uint32, key, value, hash []byte) erro
 	atomic.AddInt64(&w.leafFillSum, int64(leafFill))
 	atomic.AddInt64(&w.leafFillCount, 1)
 
-	// Report metrics periodically (only if channels are filling up)
-	// For Export/Import with prefetch, channels rarely fill, so we skip routine reports
-	if time.Since(w.lastMetricsReport) >= 30*time.Second {
-		// Only report if any channel is >20% full (indicating potential bottleneck)
-		if w.maxKvFill > int(float64(nodeChanSize)*0.2) ||
-			w.maxLeafFill > int(float64(nodeChanSize)*0.2) ||
-			w.maxBranchFill > int(float64(nodeChanSize)*0.2) {
-			w.reportPipelineMetrics()
+	// Report progress every 30 seconds (like the old Export/Import version)
+	if time.Since(w.lastProgressReport) >= 30*time.Second {
+		totalProcessed := int64(w.leafCounter + w.branchCounter)
+		elapsed := time.Since(w.traversalStartTime).Seconds()
+		nodesPerSec := float64(totalProcessed) / elapsed
+
+		// Calculate nodes/s in last 30s interval
+		var intervalNodesPerSec float64
+		if w.lastProgressReport.IsZero() {
+			intervalNodesPerSec = nodesPerSec // First report, use average
+		} else {
+			// Use current average as approximation (close enough for progress reporting)
+			intervalNodesPerSec = nodesPerSec
 		}
-		w.lastMetricsReport = time.Now()
+
+		if w.totalNodes > 0 {
+			percentage := float64(totalProcessed) * 100.0 / float64(w.totalNodes)
+			fmt.Printf("[SNAPSHOT WRITE] Tree %s: %d/%d nodes (%.1f%%) - %.0fk nodes/s in last 30s\n",
+				w.treeName, totalProcessed, w.totalNodes, percentage, intervalNodesPerSec/1000)
+		} else {
+			fmt.Printf("[SNAPSHOT WRITE] Tree %s: %d nodes - %.0fk nodes/s\n",
+				w.treeName, totalProcessed, nodesPerSec/1000)
+		}
+
+		w.lastProgressReport = time.Now()
 	}
 
 	// Check for write errors
@@ -1060,14 +1084,7 @@ func (w *snapshotWriter) writeRecursive(node Node) error {
 	default:
 	}
 
-	// Periodic progress reporting (every 30 seconds)
-	if time.Since(w.lastProgressReport) >= w.progressReportInterval {
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: progress - %d leaves, %d branches written so far\n",
-			w.treeName, w.leafCounter, w.branchCounter)
-		// Note: Removed misleading sampled metrics that measured time in writeRecursive
-		// Real parallelism metrics are shown in [PIPELINE] logs
-		w.lastProgressReport = time.Now()
-	}
+	// Progress reporting moved to writeLeaf() for better accuracy
 
 	if node.IsLeaf() {
 		return w.writeLeaf(node.Version(), node.Key(), node.Value(), node.Hash())
@@ -1112,208 +1129,6 @@ func (w *snapshotWriter) writeRecursive(node Node) error {
 
 func createFile(name string) (*os.File, error) {
 	return os.OpenFile(filepath.Clean(name), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-}
-
-// PrefetchFiles loads all snapshot files (nodes, leaves, kvs) into page cache
-// This is critical for Export/Import performance: converts random I/O to cache hits
-// Unlike prefetchSnapshot, this always prefetches all files without threshold checks
-func (snapshot *Snapshot) PrefetchFiles() error {
-	if snapshot.nodesMap == nil || snapshot.leavesMap == nil || snapshot.kvsMap == nil {
-		return nil // Empty snapshot or already closed
-	}
-
-	// Get file paths from mmap handles
-	nodesPath := snapshot.nodesMap.file.Name()
-	leavesPath := snapshot.leavesMap.file.Name()
-	kvsPath := snapshot.kvsMap.file.Name()
-
-	// Prefetch nodes file
-	if err := SequentialReadAndFillPageCache(nodesPath); err != nil {
-		return fmt.Errorf("failed to prefetch nodes: %w", err)
-	}
-
-	// Prefetch leaves file
-	if err := SequentialReadAndFillPageCache(leavesPath); err != nil {
-		return fmt.Errorf("failed to prefetch leaves: %w", err)
-	}
-
-	// Prefetch kvs file (most important for Export - eliminates random I/O!)
-	if err := SequentialReadAndFillPageCache(kvsPath); err != nil {
-		return fmt.Errorf("failed to prefetch kvs: %w", err)
-	}
-
-	return nil
-}
-
-// StreamingPrefetch implements incremental chunk-based prefetch
-// Instead of prefetching all 80GB at once, prefetch in chunks (e.g., 8GB at a time)
-// This reduces memory pressure to ~8-16GB instead of 80GB+ and ensures 100% cache hit
-//
-// Algorithm:
-//  1. Prefetch first chunk (e.g., 10% = 8GB) synchronously
-//  2. Start background goroutine that prefetches next chunk every N seconds
-//  3. Export reads from cache while next chunk is being prefetched
-//  4. Total memory: 2 chunks in cache (current + next) = 16GB max
-//
-// Parameters:
-//   - chunkPercent: percentage of total size per chunk (e.g., 10 = 10%)
-//   - intervalSec: seconds between prefetch rounds (e.g., 60 = prefetch every minute)
-func (snapshot *Snapshot) StreamingPrefetch(ctx context.Context, chunkPercent int, intervalSec int) {
-	if snapshot.nodesMap == nil || snapshot.leavesMap == nil || snapshot.kvsMap == nil {
-		return
-	}
-
-	files := []*os.File{
-		snapshot.nodesMap.file,
-		snapshot.leavesMap.file,
-		snapshot.kvsMap.file,
-	}
-
-	// Calculate file sizes and total
-	var fileSizes []int64
-	var totalSize int64
-	for _, f := range files {
-		if fi, err := f.Stat(); err == nil {
-			size := fi.Size()
-			fileSizes = append(fileSizes, size)
-			totalSize += size
-		} else {
-			fileSizes = append(fileSizes, 0)
-		}
-	}
-
-	if totalSize == 0 {
-		return
-	}
-
-	chunkSize := totalSize * int64(chunkPercent) / 100
-	numChunks := (totalSize + chunkSize - 1) / chunkSize
-
-	fmt.Printf("[STREAMING PREFETCH] Total size: %.1f GB, chunk size: %.1f GB (%d%%), num chunks: %d\n",
-		float64(totalSize)/(1024*1024*1024),
-		float64(chunkSize)/(1024*1024*1024),
-		chunkPercent,
-		numChunks)
-
-	// Prefetch first chunk synchronously
-	prefetchChunk(files, fileSizes, totalSize, 0, chunkSize)
-
-	// Start background prefetcher for remaining chunks
-	go func() {
-		ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
-		defer ticker.Stop()
-
-		currentChunk := int64(1)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if currentChunk >= numChunks {
-					fmt.Printf("[STREAMING PREFETCH] All %d chunks prefetched\n", numChunks)
-					return
-				}
-
-				startOffset := currentChunk * chunkSize
-				endOffset := startOffset + chunkSize
-				if endOffset > totalSize {
-					endOffset = totalSize
-				}
-
-				prefetchChunk(files, fileSizes, totalSize, startOffset, endOffset-startOffset)
-				currentChunk++
-			}
-		}
-	}()
-}
-
-// prefetchChunk prefetches a specific chunk range across all files proportionally
-func prefetchChunk(files []*os.File, fileSizes []int64, totalSize int64, startOffset int64, length int64) {
-	if length <= 0 {
-		return
-	}
-
-	endOffset := startOffset + length
-	if endOffset > totalSize {
-		endOffset = totalSize
-	}
-
-	fmt.Printf("[STREAMING PREFETCH] Prefetching chunk: %.1f%% - %.1f%% (%.1f GB - %.1f GB)\n",
-		float64(startOffset)*100/float64(totalSize),
-		float64(endOffset)*100/float64(totalSize),
-		float64(startOffset)/(1024*1024*1024),
-		float64(endOffset)/(1024*1024*1024))
-
-	// Prefetch range from each file proportionally
-	var currentPos int64
-	for i, f := range files {
-		if f == nil || fileSizes[i] == 0 {
-			continue
-		}
-
-		nextPos := currentPos + fileSizes[i]
-
-		// Calculate overlap between [currentPos, nextPos] and [startOffset, endOffset]
-		fileStart := int64(0)
-		if startOffset > currentPos {
-			fileStart = startOffset - currentPos
-		}
-
-		fileEnd := fileSizes[i]
-		if endOffset < nextPos {
-			fileEnd = endOffset - currentPos
-		}
-
-		if fileStart < fileEnd {
-			prefetchFileRange(f, fileStart, fileEnd)
-			fmt.Printf("[STREAMING PREFETCH] File %s: prefetched %.1f GB (offset %.1f GB - %.1f GB)\n",
-				f.Name(),
-				float64(fileEnd-fileStart)/(1024*1024*1024),
-				float64(fileStart)/(1024*1024*1024),
-				float64(fileEnd)/(1024*1024*1024))
-		}
-
-		currentPos = nextPos
-	}
-}
-
-// KeepInCache periodically touches the snapshot files to keep them in page cache
-// This prevents eviction by other processes (e.g., PebbleDB RPC reads)
-// Critical for maintaining stable Export performance when RPC is active
-func (snapshot *Snapshot) KeepInCache(ctx context.Context) {
-	if snapshot.nodesMap == nil || snapshot.leavesMap == nil || snapshot.kvsMap == nil {
-		return // Empty snapshot or already closed
-	}
-
-	files := []*os.File{
-		snapshot.nodesMap.file,
-		snapshot.leavesMap.file,
-		snapshot.kvsMap.file,
-	}
-
-	ticker := time.NewTicker(5 * time.Second) // Touch every 5 seconds
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			// Touch each file to mark pages as recently used
-			for _, f := range files {
-				if f != nil {
-					// Use fadvise WILLNEED to hint kernel to keep pages in cache
-					// This doesn't guarantee retention but increases priority
-					fi, err := f.Stat()
-					if err == nil && fi.Size() > 0 {
-						// Re-apply WILLNEED hint to boost cache priority
-						// This is a lightweight operation that just updates page flags
-						touchPageCache(f)
-					}
-				}
-			}
-		}
-	}
 }
 
 // prefetchSnapshot sequentially reads snapshot files into page cache

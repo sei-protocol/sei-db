@@ -118,7 +118,7 @@ func TestDBRewriteSnapshotWithExportImport(t *testing.T) {
 	// Verify tree is accessible and has valid hash
 	treeAfter := db2.TreeByName("test")
 	require.NotNil(t, treeAfter)
-	hashAfter := treeAfter.RootHash()
+	hashAfter := treeAfter.RootHde na
 	require.NotEmpty(t, hashAfter, "hash should not be empty")
 	// Note: hash will be different because we applied changes, but that's OK
 	// The important thing is that Export/Import worked correctly
