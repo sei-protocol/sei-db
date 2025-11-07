@@ -100,11 +100,18 @@ func TestRewriteSnapshotBackground(t *testing.T) {
 	require.NoError(t, err)
 
 	// spin up goroutine to keep querying the tree
-	stopped := false
+	stopCh := make(chan struct{})
 	go func() {
-		for !stopped {
-			value := db.TreeByName("test").Get([]byte("hello1"))
-			require.True(t, value == nil || string(value) == "world1")
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				value := db.TreeByName("test").Get([]byte("hello1"))
+				require.True(t, value == nil || string(value) == "world1")
+			case <-stopCh:
+				return
+			}
 		}
 	}()
 
@@ -124,7 +131,9 @@ func TestRewriteSnapshotBackground(t *testing.T) {
 		time.Sleep(time.Millisecond * 20)
 	}
 	for db.snapshotRewriteChan != nil {
+		db.mtx.Lock()
 		require.NoError(t, db.checkAsyncTasks())
+		db.mtx.Unlock()
 	}
 	db.pruneSnapshotLock.Lock()
 	defer db.pruneSnapshotLock.Unlock()
@@ -134,7 +143,7 @@ func TestRewriteSnapshotBackground(t *testing.T) {
 
 	// three files: snapshot, current link, rlog, LOCK
 	require.Equal(t, 4, len(entries))
-	stopped = true
+	close(stopCh)
 }
 
 // helper to commit one change to bump height
@@ -292,7 +301,7 @@ func TestInitialVersion(t *testing.T) {
 
 		db, err = OpenDB(logger.NewNopLogger(), 0, Options{Dir: dir})
 		require.NoError(t, err)
-		require.Equal(t, uint32(initialVersion), db.initialVersion)
+		require.Equal(t, uint32(initialVersion), db.initialVersion.Load())
 		require.Equal(t, v, db.Version())
 		require.Equal(t, hex.EncodeToString(hash), hex.EncodeToString(db.LastCommitInfo().StoreInfos[0].CommitId.Hash))
 

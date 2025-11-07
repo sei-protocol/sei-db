@@ -18,8 +18,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/sei-protocol/sei-db/common/metrics"
-
 	"github.com/cosmos/iavl"
 	errorutils "github.com/sei-protocol/sei-db/common/errors"
 	"github.com/sei-protocol/sei-db/common/logger"
@@ -94,7 +92,7 @@ const (
 func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (database *DB, _err error) {
 	startTime := time.Now()
 	defer func() {
-		metrics.SeiDBMetrics.RestartLatency.Record(
+		otelMetrics.RestartLatency.Record(
 			context.Background(),
 			time.Since(startTime).Seconds(),
 			metric.WithAttributes(attribute.Bool("success", _err == nil)),
@@ -182,7 +180,7 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (database *
 
 		// truncate the rlog file
 		logger.Info("truncate rlog after version: %d", targetVersion)
-		truncateIndex := utils.VersionToIndex(targetVersion, mtree.initialVersion)
+		truncateIndex := utils.VersionToIndex(targetVersion, mtree.initialVersion.Load())
 		if err := streamHandler.TruncateAfter(truncateIndex); err != nil {
 			return nil, fmt.Errorf("fail to truncate rlog file: %w", err)
 		}
@@ -280,7 +278,7 @@ func (db *DB) SetInitialVersion(initialVersion int64) error {
 		return err
 	}
 
-	return initEmptyDB(db.dir, db.initialVersion)
+	return initEmptyDB(db.dir, db.initialVersion.Load())
 }
 
 // ApplyUpgrades wraps MultiTree.ApplyUpgrades, it also appends the upgrades in a pending log,
@@ -310,9 +308,9 @@ func (db *DB) ApplyChangeSets(changeSets []*proto.NamedChangeSet) (_err error) {
 
 	startTime := time.Now()
 	defer func() {
-		metrics.SeiDBMetrics.ApplyChangesetLatency.Record(
+		otelMetrics.ApplyChangesetLatency.Record(
 			context.Background(),
-			int64(time.Since(startTime).Milliseconds()),
+			time.Since(startTime).Seconds(),
 			metric.WithAttributes(attribute.Bool("success", _err == nil)),
 		)
 	}()
@@ -380,7 +378,7 @@ func (db *DB) CommittedVersion() (int64, error) {
 	if lastIndex == 0 {
 		return db.SnapshotVersion(), nil
 	}
-	return utils.IndexToVersion(lastIndex, db.initialVersion), nil
+	return utils.IndexToVersion(lastIndex, db.initialVersion.Load()), nil
 }
 
 // checkBackgroundSnapshotRewrite check the result of background snapshot rewrite, cleans up the old snapshots and switches to a new multitree
@@ -475,7 +473,7 @@ func (db *DB) pruneSnapshots() {
 			db.logger.Error("failed to find first snapshot", "err", err)
 		}
 
-		if err := db.streamHandler.TruncateBefore(utils.VersionToIndex(earliestVersion+1, db.initialVersion)); err != nil {
+		if err := db.streamHandler.TruncateBefore(utils.VersionToIndex(earliestVersion+1, db.initialVersion.Load())); err != nil {
 			db.logger.Error("failed to truncate rlog", "err", err, "version", earliestVersion+1)
 		}
 	}()
@@ -486,13 +484,13 @@ func (db *DB) Commit() (version int64, _err error) {
 	startTime := time.Now()
 	defer func() {
 		ctx := context.Background()
-		metrics.SeiDBMetrics.CommitLatency.Record(
+		otelMetrics.CommitLatency.Record(
 			ctx,
-			int64(time.Since(startTime).Milliseconds()),
+			time.Since(startTime).Seconds(),
 			metric.WithAttributes(attribute.Bool("success", _err == nil)),
 		)
-		metrics.SeiDBMetrics.MemNodeTotalSize.Record(ctx, TotalMemNodeSize.Load())
-		metrics.SeiDBMetrics.NumOfMemNode.Record(ctx, TotalNumOfMemNode.Load())
+		otelMetrics.MemNodeTotalSize.Record(ctx, TotalMemNodeSize.Load())
+		otelMetrics.NumOfMemNode.Record(ctx, TotalNumOfMemNode.Load())
 	}()
 
 	db.mtx.Lock()
@@ -509,7 +507,7 @@ func (db *DB) Commit() (version int64, _err error) {
 	// write to changelog
 	if db.streamHandler != nil {
 		db.pendingLogEntry.Version = v
-		err := db.streamHandler.Write(utils.VersionToIndex(v, db.initialVersion), db.pendingLogEntry)
+		err := db.streamHandler.Write(utils.VersionToIndex(v, db.initialVersion.Load()), db.pendingLogEntry)
 		if err != nil {
 			return 0, err
 		}
@@ -567,22 +565,52 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 	tmpDir := snapshotDir + "-tmp"
 	path := filepath.Join(db.dir, tmpDir)
 
-	fmt.Printf("[REWRITE] Using Pipeline Write\n")
-
 	writeStart := time.Now()
 	err := db.MultiTree.WriteSnapshot(ctx, path, db.snapshotWriterPool)
 	writeElapsed := time.Since(writeStart).Seconds()
 
 	if err != nil {
-		fmt.Printf("[REWRITE] Write failed after %.1fs: %v\n", writeElapsed, err)
-		return errorutils.Join(err, os.RemoveAll(path))
+		db.logger.Error("snapshot write failed, cleaning up temporary directory",
+			"tmpDir", tmpDir,
+			"error", err,
+		)
+		cleanupErr := os.RemoveAll(path)
+		if cleanupErr != nil {
+			db.logger.Error("failed to clean up temporary snapshot directory",
+				"tmpDir", tmpDir,
+				"cleanup_error", cleanupErr,
+			)
+		} else {
+			db.logger.Info("temporary snapshot directory cleaned up successfully",
+				"tmpDir", tmpDir,
+			)
+		}
+		return errorutils.Join(err, cleanupErr)
 	}
 
-	fmt.Printf("[REWRITE] Write completed in %.1fs (%.1fmin)\n", writeElapsed, writeElapsed/60)
+	db.logger.Info("snapshot rewrite completed", "duration_sec", writeElapsed)
 
-	if err := os.Rename(path, filepath.Join(db.dir, snapshotDir)); err != nil {
+	// Rename temporary directory to final location
+	if err := os.Rename(path, targetPath); err != nil {
+		db.logger.Error("failed to rename snapshot directory, cleaning up",
+			"tmpDir", tmpDir,
+			"targetDir", snapshotDir,
+			"error", err,
+		)
+		// Clean up temporary directory on rename failure
+		if cleanupErr := os.RemoveAll(path); cleanupErr != nil {
+			db.logger.Error("failed to clean up temporary snapshot directory after rename failure",
+				"tmpDir", tmpDir,
+				"cleanup_error", cleanupErr,
+			)
+			return errorutils.Join(err, cleanupErr)
+		}
+		db.logger.Info("temporary snapshot directory cleaned up after rename failure",
+			"tmpDir", tmpDir,
+		)
 		return err
 	}
+
 	return updateCurrentSymlink(db.dir, snapshotDir)
 }
 
@@ -661,7 +689,6 @@ func (db *DB) rewriteSnapshotBackground() error {
 	go func() {
 		defer close(ch)
 		startTime := time.Now()
-		fmt.Printf("[SNAPSHOT REWRITE] Starting snapshot rewrite process for version %d\n", cloned.Version())
 		cloned.logger.Info("start rewriting snapshot", "version", cloned.Version())
 
 		rewriteStart := time.Now()
@@ -695,9 +722,8 @@ func (db *DB) rewriteSnapshotBackground() error {
 
 		ch <- snapshotResult{mtree: mtree}
 		totalElapsed := time.Since(startTime).Seconds()
-		fmt.Printf("[SNAPSHOT REWRITE] Snapshot rewrite process completed in %.1fs (%.1fmin)\n", totalElapsed, totalElapsed/60)
-		cloned.logger.Info("snapshot background process completed", "total_elapsed", totalElapsed)
-		metrics.SeiDBMetrics.SnapshotCreationLatency.Record(
+		cloned.logger.Info("snapshot rewrite process completed", "duration_sec", totalElapsed, "duration_min", totalElapsed/60)
+		otelMetrics.SnapshotCreationLatency.Record(
 			context.Background(),
 			totalElapsed,
 		)

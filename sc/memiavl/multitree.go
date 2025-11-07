@@ -16,7 +16,6 @@ import (
 	"github.com/cosmos/iavl"
 	"github.com/sei-protocol/sei-db/common/errors"
 	"github.com/sei-protocol/sei-db/common/logger"
-	"github.com/sei-protocol/sei-db/common/metrics"
 	"github.com/sei-protocol/sei-db/common/utils"
 	"github.com/sei-protocol/sei-db/proto"
 	"github.com/sei-protocol/sei-db/stream/types"
@@ -47,7 +46,8 @@ type MultiTree struct {
 	// if the tree is start from genesis, it's the initial version of the chain,
 	// if the tree is imported from snapshot, it's the imported version plus one,
 	// it always corresponds to the rlog entry with index 1.
-	initialVersion uint32
+	// Use atomic for concurrent read/write safety
+	initialVersion atomic.Uint32
 
 	zeroCopy bool
 	logger   logger.Logger
@@ -61,12 +61,13 @@ type MultiTree struct {
 }
 
 func NewEmptyMultiTree(initialVersion uint32) *MultiTree {
-	return &MultiTree{
-		initialVersion: initialVersion,
-		treesByName:    make(map[string]int),
-		zeroCopy:       true,
-		logger:         logger.NewNopLogger(),
+	mt := &MultiTree{
+		treesByName: make(map[string]int),
+		zeroCopy:    true,
+		logger:      logger.NewNopLogger(),
 	}
+	mt.initialVersion.Store(initialVersion)
+	return mt
 }
 
 func LoadMultiTree(dir string, opts Options) (*MultiTree, error) {
@@ -161,9 +162,9 @@ func (t *MultiTree) setInitialVersion(initialVersion int64) {
 		panic(fmt.Sprintf("initial version %d is out of range", initialVersion))
 	}
 	iv := uint32(initialVersion)
-	t.initialVersion = iv
+	t.initialVersion.Store(iv)
 	for _, entry := range t.trees {
-		entry.initialVersion = t.initialVersion
+		entry.initialVersion = iv
 	}
 }
 
@@ -241,7 +242,7 @@ func (t *MultiTree) ApplyUpgrades(upgrades []*proto.TreeNameUpgrade) error {
 			t.trees[i].Name = upgrade.Name
 		default:
 			// add tree
-			v := utils.NextVersion(t.Version(), t.initialVersion)
+			v := utils.NextVersion(t.Version(), t.initialVersion.Load())
 			if v < 0 || v > math.MaxUint32 {
 				return fmt.Errorf("version overflows uint32: %d", v)
 			}
@@ -271,7 +272,7 @@ func (t *MultiTree) ApplyChangeSet(name string, changeSet iavl.ChangeSet) error 
 	if !found {
 		return fmt.Errorf("unknown tree name %s", name)
 	}
-	metrics.SeiDBMetrics.NumOfKVPairs.Add(context.Background(), int64(len(changeSet.Pairs)))
+	otelMetrics.NumOfKVPairs.Add(context.Background(), int64(len(changeSet.Pairs)))
 	t.trees[i].ApplyChangeSet(changeSet)
 	return nil
 }
@@ -288,13 +289,13 @@ func (t *MultiTree) ApplyChangeSets(changeSets []*proto.NamedChangeSet) error {
 
 // WorkingCommitInfo returns the commit info for the working tree
 func (t *MultiTree) WorkingCommitInfo() *proto.CommitInfo {
-	version := utils.NextVersion(t.lastCommitInfo.Version, t.initialVersion)
+	version := utils.NextVersion(t.lastCommitInfo.Version, t.initialVersion.Load())
 	return t.buildCommitInfo(version)
 }
 
 // SaveVersion bumps the versions of all the stores and optionally returns the new app hash
 func (t *MultiTree) SaveVersion(updateCommitInfo bool) (int64, error) {
-	t.lastCommitInfo.Version = utils.NextVersion(t.lastCommitInfo.Version, t.initialVersion)
+	t.lastCommitInfo.Version = utils.NextVersion(t.lastCommitInfo.Version, t.initialVersion.Load())
 	for _, entry := range t.trees {
 		if _, _, err := entry.SaveVersion(updateCommitInfo); err != nil {
 			return 0, err
@@ -343,7 +344,8 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 		return fmt.Errorf("read rlog last index failed, %w", err)
 	}
 
-	firstIndex := utils.VersionToIndex(utils.NextVersion(t.Version(), t.initialVersion), t.initialVersion)
+	iv := t.initialVersion.Load()
+	firstIndex := utils.VersionToIndex(utils.NextVersion(t.Version(), iv), iv)
 	if firstIndex > lastIndex {
 		// already up-to-date
 		return nil
@@ -351,7 +353,7 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 
 	endIndex := lastIndex
 	if endVersion != 0 {
-		endIndex = utils.VersionToIndex(endVersion, t.initialVersion)
+		endIndex = utils.VersionToIndex(endVersion, iv)
 	}
 
 	if endIndex < firstIndex {
@@ -378,7 +380,7 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 				tree.ApplyChangeSetAsync(iavl.ChangeSet{})
 			}
 		}
-		t.lastCommitInfo.Version = utils.NextVersion(t.lastCommitInfo.Version, t.initialVersion)
+		t.lastCommitInfo.Version = utils.NextVersion(t.lastCommitInfo.Version, t.initialVersion.Load())
 		t.lastCommitInfo.StoreInfos = []proto.StoreInfo{}
 		replayCount++
 		if replayCount%1000 == 0 {
@@ -403,8 +405,7 @@ func (t *MultiTree) Catchup(stream types.Stream[proto.ChangelogEntry], endVersio
 }
 
 func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.WorkerPool) error {
-	fmt.Printf("[SNAPSHOT WRITE] Version: Pipeline+PriorityEVM (optimized)\n")
-	fmt.Printf("[SNAPSHOT WRITE] Starting to write %d trees\n", len(t.trees))
+	t.logger.Info("starting snapshot write", "trees", len(t.trees))
 
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil { //nolint:gosec
 		return err
@@ -418,7 +419,6 @@ func (t *MultiTree) WriteSnapshot(ctx context.Context, dir string, wp *pond.Work
 // Best strategy: reduces disk I/O contention for the largest tree
 func (t *MultiTree) writeSnapshotPriorityEVM(ctx context.Context, dir string, wp *pond.WorkerPool) error {
 	startTime := time.Now()
-	fmt.Printf("[SNAPSHOT WRITE] Strategy: Priority EVM (EVM first, then parallel)\n")
 
 	// Phase 1: Write EVM tree first (if it exists)
 	var evmTree *Tree
@@ -435,90 +435,26 @@ func (t *MultiTree) writeSnapshotPriorityEVM(ctx context.Context, dir string, wp
 	}
 
 	if evmTree != nil {
-		fmt.Printf("[SNAPSHOT WRITE] Phase 1: Writing EVM tree first (largest tree, 73%% of total data)\n")
-
-		// Phase 1a: Drop other trees' cache to make room for EVM
-		// This is critical for 128GB RAM machines where memory is tight
-		t.logger.Info("dropping cache for non-evm trees", "count", len(otherTrees))
-		dropStart := time.Now()
-		for _, entry := range otherTrees {
-			if entry.Tree.snapshot != nil {
-				// Drop cache for nodes, leaves, kvs
-				_ = entry.Tree.snapshot.dropCacheHint()
-			}
-		}
-		dropElapsed := time.Since(dropStart).Seconds()
-		t.logger.Info("cache drop completed", "duration_sec", dropElapsed)
-
-		// Phase 1b: Prefetch EVM snapshot files for snapshot creation (nodes/leaves/kvs)
-		// This is critical for performance: load all data into page cache before writing
-		t.logger.Info("prefetching evm snapshot for write", "phase", "1/2 - prefetch")
-		prefetchStart := time.Now()
-		if evmTree.snapshot != nil && t.lastCommitInfo.Version > 0 {
-			// Construct the path to the EVM snapshot directory in the current snapshot
-			currentSnapshotDir := filepath.Join(filepath.Dir(dir), fmt.Sprintf("snapshot-%020d", t.lastCommitInfo.Version))
-			evmSnapshotDir := filepath.Join(currentSnapshotDir, evmName)
-			evmTree.snapshot.prefetchSnapshotForWrite(evmSnapshotDir)
-		}
-		prefetchElapsed := time.Since(prefetchStart).Seconds()
-		t.logger.Info("evm prefetch completed", "duration_sec", prefetchElapsed)
-
-		t.logger.Info("writing evm tree", "phase", "1/2 - write")
+		t.logger.Info("writing evm tree", "phase", "1/2")
 		evmStart := time.Now()
 		if err := evmTree.WriteSnapshot(ctx, filepath.Join(dir, evmName)); err != nil {
 			return err
 		}
 		evmElapsed := time.Since(evmStart).Seconds()
-		fmt.Printf("[SNAPSHOT WRITE] Phase 1 completed: EVM tree written in %.1fs\n", evmElapsed)
-		fmt.Printf("[SNAPSHOT WRITE] Progress: 1/%d trees completed\n", len(t.trees))
-
-		// Phase 2a: Drop EVM cache to make room for other trees
-		// This is critical for 128GB RAM: EVM occupied ~80GB, now we can reuse it
-		if evmTree.snapshot != nil {
-			t.logger.Info("dropping evm cache after write to free memory")
-			dropStart := time.Now()
-			_ = evmTree.snapshot.dropCacheHint()
-			t.logger.Info("evm cache drop completed", "duration_sec", time.Since(dropStart).Seconds())
-		}
-
-		// Phase 2b: Prefetch large trees (acc, bank, wasm) for fast writes
-		// Now we have ~80GB free space from dropping EVM
-		fmt.Printf("[SNAPSHOT WRITE] Phase 2a: Prefetching large trees for write\n")
-		prefetchStart2 := time.Now()
-		largeTrees := []string{"acc", "bank", "wasm"}
-		currentSnapshotDir := filepath.Join(filepath.Dir(dir), fmt.Sprintf("snapshot-%020d", t.lastCommitInfo.Version))
-		for _, entry := range otherTrees {
-			// Check if this tree is one of the large trees we want to prefetch
-			for _, largeName := range largeTrees {
-				if entry.Name == largeName && entry.Tree.snapshot != nil {
-					treeSnapshotDir := filepath.Join(currentSnapshotDir, entry.Name)
-					t.logger.Info("prefetching tree for write", "tree", entry.Name)
-					entry.Tree.snapshot.prefetchSnapshotForWrite(treeSnapshotDir)
-					break
-				}
-			}
-		}
-		prefetchElapsed2 := time.Since(prefetchStart2).Seconds()
-		fmt.Printf("[SNAPSHOT WRITE] Phase 2a completed: Prefetch in %.1fs\n", prefetchElapsed2)
+		t.logger.Info("evm tree completed", "duration_sec", evmElapsed)
 	}
 
-	// Phase 2c: Write all other trees in parallel
+	// Phase 2: Write all other trees in parallel
 	if len(otherTrees) > 0 {
-		fmt.Printf("[SNAPSHOT WRITE] Phase 2b: Writing %d remaining trees in parallel\n", len(otherTrees))
+		t.logger.Info("writing remaining trees", "phase", "2/2", "count", len(otherTrees))
 		phase2Start := time.Now()
 
 		group, _ := wp.GroupContext(ctx)
-		completed := int32(1) // Start from 1 (EVM already done)
 
 		for _, entry := range otherTrees {
 			tree, name := entry.Tree, entry.Name
 			group.Submit(func() error {
-				err := tree.WriteSnapshot(ctx, filepath.Join(dir, name))
-				if err == nil {
-					current := atomic.AddInt32(&completed, 1)
-					fmt.Printf("[SNAPSHOT WRITE] Progress: %d/%d trees completed\n", current, len(t.trees))
-				}
-				return err
+				return tree.WriteSnapshot(ctx, filepath.Join(dir, name))
 			})
 		}
 
@@ -527,17 +463,16 @@ func (t *MultiTree) writeSnapshotPriorityEVM(ctx context.Context, dir string, wp
 		}
 
 		phase2Elapsed := time.Since(phase2Start).Seconds()
-		fmt.Printf("[SNAPSHOT WRITE] Phase 2b completed: %d trees written in %.1fs\n", len(otherTrees), phase2Elapsed)
+		t.logger.Info("remaining trees completed", "duration_sec", phase2Elapsed, "count", len(otherTrees))
 	}
 
 	elapsed := time.Since(startTime).Seconds()
-	fmt.Printf("[SNAPSHOT WRITE] All %d trees completed in %.1fs\n", len(t.trees), elapsed)
+	t.logger.Info("all trees completed", "duration_sec", elapsed, "trees", len(t.trees))
 
 	// write commit info
-	fmt.Printf("[SNAPSHOT WRITE] Writing metadata file\n")
 	metadata := proto.MultiTreeMetadata{
 		CommitInfo:     &t.lastCommitInfo,
-		InitialVersion: int64(t.initialVersion),
+		InitialVersion: int64(t.initialVersion.Load()),
 	}
 	bz, err := metadata.Marshal()
 	if err != nil {

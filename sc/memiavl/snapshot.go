@@ -38,13 +38,10 @@ const (
 	FileNameMetadata = "metadata"
 )
 
-// dropFileCache is defined in snapshot_linux.go and snapshot_other.go
-
-// monitoringWriter wraps an os.File to track write progress and optionally drop cache
+// monitoringWriter wraps an os.File to track write progress
 type monitoringWriter struct {
-	f         *os.File
-	written   int64
-	dropCache bool // If true, drop write cache after sync to prevent memory pressure
+	f       *os.File
+	written int64
 }
 
 func (w *monitoringWriter) Write(p []byte) (n int, err error) {
@@ -55,17 +52,6 @@ func (w *monitoringWriter) Write(p []byte) (n int, err error) {
 
 	w.written += int64(n)
 	return n, err
-}
-
-// dropCacheAfterSync drops write cache after sync for the entire file
-// This is more reliable than dropping during writes because data is actually on disk
-func (w *monitoringWriter) dropCacheAfterSync() error {
-	if !w.dropCache || w.written == 0 {
-		return nil
-	}
-	fmt.Printf("[CACHE DROP] Dropping %d MB write cache for file\n", w.written/(1024*1024))
-	// Drop cache for the entire file
-	return dropFileCache(int(w.f.Fd()), 0, w.written)
 }
 
 // Snapshot manage the lifecycle of mmap-ed files for the snapshot,
@@ -405,21 +391,16 @@ func (snapshot *Snapshot) export(callback func(*types.SnapshotNode) bool) {
 }
 
 func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
-	treeName := filepath.Base(snapshotDir)
-	startTime := time.Now()
-
 	// Estimate tree size: root.Size() returns leaf count, total = leaves + branches ≈ 2x
 	treeSize := int64(0)
 	if t.root != nil {
 		treeSize = t.root.Size() * 2 // Total nodes (leaves + branches)
 	}
 
-	fmt.Printf("[SNAPSHOT WRITE] Starting to write snapshot for tree: %s (size: %d nodes)\n", treeName, treeSize)
-
 	// Use 256MB buffer for all trees (large buffer for better performance)
 	bufSize := bufIOSize
 
-	err := writeSnapshotWithBuffer(ctx, snapshotDir, t.version, bufSize, treeSize, func(w *snapshotWriter) (uint32, error) {
+	err := writeSnapshotWithBuffer(ctx, snapshotDir, t.version, bufSize, treeSize, t.logger, func(w *snapshotWriter) (uint32, error) {
 		if t.root == nil {
 			return 0, nil
 		}
@@ -431,12 +412,9 @@ func (t *Tree) WriteSnapshot(ctx context.Context, snapshotDir string) error {
 	})
 
 	if err != nil {
-		fmt.Printf("[SNAPSHOT WRITE] Failed to write snapshot for tree %s: %v\n", treeName, err)
 		return err
 	}
 
-	elapsed := time.Since(startTime).Seconds()
-	fmt.Printf("[SNAPSHOT WRITE] Completed writing snapshot for tree %s in %.1fs\n", treeName, elapsed)
 	return nil
 }
 
@@ -446,6 +424,7 @@ func writeSnapshotWithBuffer(
 	dir string, version uint32,
 	bufSize int,
 	totalNodes int64,
+	log logger.Logger,
 	doWrite func(*snapshotWriter) (uint32, error),
 ) (returnErr error) {
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil { //nolint:gosec
@@ -487,83 +466,37 @@ func writeSnapshotWithBuffer(
 	}()
 
 	// Wrap files with monitoring writers for progress tracking
-	// Enable write cache drop for EVM tree to prevent memory pressure on 128GB RAM machines
-	treeName := filepath.Base(dir)
-	enableWriteCacheDrop := treeName == "evm"
-
-	nodesMonitor := &monitoringWriter{
-		f:         fpNodes,
-		dropCache: enableWriteCacheDrop,
-	}
-	leavesMonitor := &monitoringWriter{
-		f:         fpLeaves,
-		dropCache: enableWriteCacheDrop,
-	}
-	kvsMonitor := &monitoringWriter{
-		f:         fpKVs,
-		dropCache: enableWriteCacheDrop,
-	}
+	nodesMonitor := &monitoringWriter{f: fpNodes}
+	leavesMonitor := &monitoringWriter{f: fpLeaves}
+	kvsMonitor := &monitoringWriter{f: fpKVs}
 
 	// Create buffered writers with large buffers (2GB each for EVM tree)
 	nodesWriter := bufio.NewWriterSize(nodesMonitor, bufSize)
 	leavesWriter := bufio.NewWriterSize(leavesMonitor, bufSize)
 	kvsWriter := bufio.NewWriterSize(kvsMonitor, bufSize)
 
-	w := newSnapshotWriter(ctx, nodesWriter, leavesWriter, kvsWriter)
+	w := newSnapshotWriter(ctx, nodesWriter, leavesWriter, kvsWriter, log)
 	w.treeName = filepath.Base(dir) // Set tree name for progress reporting
 	w.totalNodes = totalNodes       // Set total nodes for progress percentage
 	w.traversalStartTime = time.Now()
 
-	writeStart := time.Now()
 	leaves, err := doWrite(w)
+	// Always wait for writer goroutines to finish
+	waitErr := w.waitForWrites()
+
+	// Handle errors with priority to waitErr (the underlying I/O error)
 	if err != nil {
+		// If doWrite failed due to context cancellation, return the real I/O error
+		if err == context.Canceled && waitErr != nil {
+			return waitErr
+		}
 		return err
 	}
-	traversalElapsed := time.Since(writeStart).Seconds()
-
-	fmt.Printf("[SNAPSHOT WRITE] Tree %s: traversal completed in %.1fs, waiting for writes to finish...\n",
-		treeName, traversalElapsed)
-
-	// Wait for all pending writes to complete
-	waitStart := time.Now()
-	if err := w.waitForWrites(); err != nil {
-		return err
-	}
-	waitElapsed := time.Since(waitStart).Seconds()
-
-	writeElapsed := time.Since(writeStart).Seconds()
-	totalNodesWritten := int64(w.leafCounter + w.branchCounter)
-	avgNodesPerSec := float64(totalNodesWritten) / traversalElapsed
-	fmt.Printf("[SNAPSHOT WRITE] Tree %s: wrote %d leaves and %d branches in %.1fs (avg: %.0fk nodes/s)\n",
-		treeName, w.leafCounter, w.branchCounter, traversalElapsed, avgNodesPerSec/1000)
-	fmt.Printf("[SNAPSHOT WRITE] Tree %s: traversal: %.1fs, wait: %.1fs, total: %.1fs\n",
-		treeName, traversalElapsed, waitElapsed, writeElapsed)
-
-	// Report pipeline metrics if channels filled >20%
-	maxFillPct := 0.0
-	if w.maxKvFill > 0 {
-		maxFillPct = float64(w.maxKvFill) / float64(nodeChanSize) * 100
-	}
-	if w.maxLeafFill > 0 {
-		leafPct := float64(w.maxLeafFill) / float64(nodeChanSize) * 100
-		if leafPct > maxFillPct {
-			maxFillPct = leafPct
-		}
-	}
-	if w.maxBranchFill > 0 {
-		branchPct := float64(w.maxBranchFill) / float64(nodeChanSize) * 100
-		if branchPct > maxFillPct {
-			maxFillPct = branchPct
-		}
-	}
-
-	if maxFillPct > 20 {
-		fmt.Printf("[PIPELINE] Tree %s: max channel fill %.1f%% - printing details:\n", w.treeName, maxFillPct)
-		w.reportPipelineMetrics()
+	if waitErr != nil {
+		return waitErr
 	}
 
 	if leaves > 0 {
-		flushStart := time.Now()
 		if err := nodesWriter.Flush(); err != nil {
 			return err
 		}
@@ -581,20 +514,6 @@ func writeSnapshotWithBuffer(
 		}
 		if err := fpKVs.Sync(); err != nil {
 			return err
-		}
-
-		fmt.Printf("[SNAPSHOT WRITE] Tree %s: flushed and synced all files in %.1fs\n",
-			treeName, time.Since(flushStart).Seconds())
-
-		// Drop write cache after sync - this is critical for 128GB RAM machines
-		// Data is now on disk, so we can safely drop cache to prevent memory pressure
-		if enableWriteCacheDrop {
-			dropStart := time.Now()
-			_ = nodesMonitor.dropCacheAfterSync()
-			_ = leavesMonitor.dropCacheAfterSync()
-			_ = kvsMonitor.dropCacheAfterSync()
-			fmt.Printf("[SNAPSHOT WRITE] Tree %s: dropped write cache in %.1fs\n",
-				treeName, time.Since(dropStart).Seconds())
 		}
 	}
 
@@ -628,7 +547,8 @@ func writeSnapshot(
 	dir string, version uint32,
 	doWrite func(*snapshotWriter) (uint32, error),
 ) error {
-	return writeSnapshotWithBuffer(ctx, dir, version, bufIOSize, 0, doWrite)
+	// Use nop logger for backward compatibility
+	return writeSnapshotWithBuffer(ctx, dir, version, bufIOSize, 0, logger.NewNopLogger(), doWrite)
 }
 
 // kvWriteOp represents a key-value write operation
@@ -657,7 +577,8 @@ type branchWriteOp struct {
 
 type snapshotWriter struct {
 	// context for cancel the writing process
-	ctx context.Context
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	nodesWriter, leavesWriter, kvWriter io.Writer
 
@@ -673,6 +594,7 @@ type snapshotWriter struct {
 	traversalStartTime     time.Time
 	lastProgressReport     time.Time
 	progressReportInterval time.Duration
+	logger                 logger.Logger
 
 	// Pipeline for async writes - separate channels for each file
 	kvChan     chan kvWriteOp
@@ -706,10 +628,11 @@ func SetPipelineBufferSize(size int) {
 		size = 100000 // Maximum to avoid excessive memory usage
 	}
 	nodeChanSize = size
-	fmt.Printf("[PIPELINE] Pipeline buffer size set to %d operations per channel\n", nodeChanSize)
 }
 
-func newSnapshotWriter(ctx context.Context, nodesWriter, leavesWriter, kvsWriter io.Writer) *snapshotWriter {
+func newSnapshotWriter(ctx context.Context, nodesWriter, leavesWriter, kvsWriter io.Writer, log logger.Logger) *snapshotWriter {
+	// Create a cancelable context so we can stop producers on error
+	ctx, cancel := context.WithCancel(ctx)
 	now := time.Now()
 
 	// Create separate buffered channels for each file type
@@ -722,11 +645,13 @@ func newSnapshotWriter(ctx context.Context, nodesWriter, leavesWriter, kvsWriter
 
 	w := &snapshotWriter{
 		ctx:                    ctx,
+		cancel:                 cancel,
 		nodesWriter:            nodesWriter,
 		leavesWriter:           leavesWriter,
 		kvWriter:               kvsWriter,
 		lastProgressReport:     now,
 		progressReportInterval: 30 * time.Second,
+		logger:                 log,
 		kvChan:                 kvChan,
 		leafChan:               leafChan,
 		branchChan:             branchChan,
@@ -749,10 +674,7 @@ func (w *snapshotWriter) kvWriterLoop() {
 
 	for op := range w.kvChan {
 		if err := w.writeKeyValueDirect(op.key, op.value); err != nil {
-			select {
-			case w.writeErrors <- fmt.Errorf("kv write error: %w", err):
-			default:
-			}
+			w.fail(fmt.Errorf("kv write error: %w", err))
 			return
 		}
 	}
@@ -764,10 +686,7 @@ func (w *snapshotWriter) leafWriterLoop() {
 
 	for op := range w.leafChan {
 		if err := w.writeLeafDirect(op.version, op.keyLen, op.keyOffset, op.hash); err != nil {
-			select {
-			case w.writeErrors <- fmt.Errorf("leaf write error: %w", err):
-			default:
-			}
+			w.fail(fmt.Errorf("leaf write error: %w", err))
 			return
 		}
 	}
@@ -779,13 +698,30 @@ func (w *snapshotWriter) branchWriterLoop() {
 
 	for op := range w.branchChan {
 		if err := w.writeBranchDirect(op.version, op.size, op.height, op.preTrees, op.keyLeaf, op.hash); err != nil {
-			select {
-			case w.writeErrors <- fmt.Errorf("branch write error: %w", err):
-			default:
-			}
+			w.fail(fmt.Errorf("branch write error: %w", err))
 			return
 		}
 	}
+}
+
+// fail records an error and cancels the context to stop producers
+func (w *snapshotWriter) fail(err error) {
+	// Log the error immediately for debugging
+	if w.logger != nil {
+		w.logger.Error("snapshot writer failed, canceling operation",
+			"tree", w.treeName,
+			"error", err.Error(),
+			"branches_written", w.branchCounter,
+			"leaves_written", w.leafCounter,
+		)
+	}
+
+	select {
+	case w.writeErrors <- err:
+	default:
+		// Channel full, error already recorded
+	}
+	w.cancel()
 }
 
 // waitForWrites waits for all pending writes to complete and returns any error
@@ -795,14 +731,35 @@ func (w *snapshotWriter) waitForWrites() error {
 	close(w.leafChan)
 	close(w.branchChan)
 
+	if w.logger != nil {
+		w.logger.Info("waiting for async writers to complete",
+			"tree", w.treeName,
+			"branches_queued", w.branchCounter,
+			"leaves_queued", w.leafCounter,
+		)
+	}
+
 	// Wait for all writer goroutines to finish
 	w.wg.Wait()
 
 	// Check for any errors
 	select {
 	case err := <-w.writeErrors:
+		if w.logger != nil {
+			w.logger.Error("async writer reported error after completion",
+				"tree", w.treeName,
+				"error", err.Error(),
+			)
+		}
 		return err
 	default:
+		if w.logger != nil {
+			w.logger.Info("all async writers completed successfully",
+				"tree", w.treeName,
+				"total_branches", w.branchCounter,
+				"total_leaves", w.leafCounter,
+			)
+		}
 		return nil
 	}
 }
@@ -850,24 +807,6 @@ func (w *snapshotWriter) writeLeaf(version uint32, key, value, hash []byte) erro
 	atomic.AddInt64(&w.kvFillCount, 1)
 	atomic.AddInt64(&w.leafFillSum, int64(leafFill))
 	atomic.AddInt64(&w.leafFillCount, 1)
-
-	// Report progress every 30 seconds
-	if time.Since(w.lastProgressReport) >= 30*time.Second {
-		totalProcessed := int64(w.leafCounter + w.branchCounter)
-		elapsed := time.Since(w.traversalStartTime).Seconds()
-		nodesPerSec := float64(totalProcessed) / elapsed
-
-		if w.totalNodes > 0 {
-			percentage := float64(totalProcessed) * 100.0 / float64(w.totalNodes)
-			fmt.Printf("[SNAPSHOT WRITE] Tree %s: %d/%d nodes (%.1f%%) - %.0fk nodes/s\n",
-				w.treeName, totalProcessed, w.totalNodes, percentage, nodesPerSec/1000)
-		} else {
-			fmt.Printf("[SNAPSHOT WRITE] Tree %s: %d nodes - %.0fk nodes/s\n",
-				w.treeName, totalProcessed, nodesPerSec/1000)
-		}
-
-		w.lastProgressReport = time.Now()
-	}
 
 	// Calculate key offset BEFORE sending to KV channel
 	keyOffset := w.kvsOffset
@@ -980,58 +919,7 @@ func (w *snapshotWriter) writeBranchDirect(version, size uint32, height, preTree
 	return nil
 }
 
-// reportPipelineMetrics reports channel fill statistics for all 3 channels
-func (w *snapshotWriter) reportPipelineMetrics() {
-	kvCount := atomic.LoadInt64(&w.kvFillCount)
-	leafCount := atomic.LoadInt64(&w.leafFillCount)
-	branchCount := atomic.LoadInt64(&w.branchFillCount)
-
-	if kvCount == 0 && leafCount == 0 && branchCount == 0 {
-		return
-	}
-
-	chanCap := float64(cap(w.kvChan))
-
-	// Find the most filled channel
-	maxChannel := ""
-	maxFillPct := 0.0
-
-	if kvCount > 0 {
-		maxKvFillPct := float64(w.maxKvFill) / chanCap * 100
-		if maxKvFillPct > maxFillPct {
-			maxFillPct = maxKvFillPct
-			maxChannel = "KV"
-		}
-	}
-
-	if leafCount > 0 {
-		maxLeafFillPct := float64(w.maxLeafFill) / chanCap * 100
-		if maxLeafFillPct > maxFillPct {
-			maxFillPct = maxLeafFillPct
-			maxChannel = "Leaf"
-		}
-	}
-
-	if branchCount > 0 {
-		maxBranchFillPct := float64(w.maxBranchFill) / chanCap * 100
-		if maxBranchFillPct > maxFillPct {
-			maxFillPct = maxBranchFillPct
-			maxChannel = "Branch"
-		}
-	}
-
-	// Only print if there's a potential bottleneck (>20% fill)
-	if maxFillPct > 80 {
-		fmt.Printf("[PIPELINE] Tree %s: WARNING - %s channel %.1f%% full, writes are bottleneck!\n",
-			w.treeName, maxChannel, maxFillPct)
-	} else if maxFillPct > 20 {
-		fmt.Printf("[PIPELINE] Tree %s: %s channel max %.1f%% full (writes keeping up)\n",
-			w.treeName, maxChannel, maxFillPct)
-	}
-}
-
-// writeRecursive write the node recursively in depth-first post-order,
-// returns `(nodeIndex, err)`.
+// writeRecursive writes the node recursively in depth-first post-order
 func (w *snapshotWriter) writeRecursive(node Node) error {
 	select {
 	case <-w.ctx.Done():
@@ -1078,111 +966,40 @@ func createFile(name string) (*os.File, error) {
 // prefetchSnapshot sequentially reads snapshot files into page cache
 // This is critical for cold-start performance: eliminates 99% of random I/O during replay
 func (snapshot *Snapshot) prefetchSnapshot(snapshotDir string, prefetchThreshold float64) {
-	snapshot.prefetchSnapshotWithMode(snapshotDir, prefetchThreshold, false)
-}
-
-// prefetchSnapshotForWrite prefetches snapshot for write operation (snapshot creation)
-// Forces loading all files (nodes/leaves/kvs) for EVM without threshold check
-func (snapshot *Snapshot) prefetchSnapshotForWrite(snapshotDir string) {
-	snapshot.prefetchSnapshotWithMode(snapshotDir, 0, true)
-}
-
-// prefetchSnapshotWithMode handles both cold start and snapshot creation prefetch
-// forWrite=true: Force load all files (nodes/leaves/kvs) for snapshot creation, no threshold check
-// forWrite=false: Cold start mode, only load nodes/leaves with threshold check
-func (snapshot *Snapshot) prefetchSnapshotWithMode(snapshotDir string, prefetchThreshold float64, forWrite bool) {
 	startTime := time.Now()
 	if snapshot.nodes == nil && snapshot.leaves == nil {
 		return // Empty snapshot
 	}
-
+	// Selective preload: only preload large and active trees
+	// Small/inactive trees have minimal I/O during replay, not worth preloading
 	treeName := filepath.Base(snapshotDir)
-	log := snapshot.logger
-
-	// For cold start: selective preload based on tree name
-	// For write: only prefetch if it's EVM (we do EVM first in writeSnapshotPriorityEVM)
-	if forWrite {
-		if treeName != "evm" {
-			return // Only prefetch EVM for snapshot creation
-		}
-		log.Info("Prefetch for snapshot creation", "tree", treeName)
-	} else {
-		// Cold start mode: check if tree should be preloaded
-		needsPreload := shouldPreloadTree(treeName)
-		if !needsPreload {
-			return
-		}
-
-		// Check page cache residency for cold start
-		residentNodes, errNodes := residentRatio(snapshot.nodes)
-		residentLeaves, errLeaves := residentRatio(snapshot.leaves)
-		if errNodes == nil && errLeaves == nil {
-			if residentNodes >= prefetchThreshold && residentLeaves >= prefetchThreshold {
-				log.Debug(fmt.Sprintf("Skipped prefetching for tree %s\n", treeName))
-				return
-			}
-		}
-
-		// Cold start: check threshold before loading
-		if residentNodes < prefetchThreshold {
-			log.Info(fmt.Sprintf("Tree %s nodes page cache residency ratio is %f, below threshold %f\n", treeName, residentNodes, prefetchThreshold))
-			_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameNodes))
-		}
-
-		if residentLeaves < prefetchThreshold {
-			log.Info(fmt.Sprintf("Tree %s leaves page cache residency ratio is %f, below threshold %f\n", treeName, residentLeaves, prefetchThreshold))
-			_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameLeaves))
-		}
-
-		log.Info(fmt.Sprintf("Prefetch snapshot for %s completed in %fs. Consider adding more RAM for page cache to avoid preloading during restart.\n", treeName, time.Since(startTime).Seconds()))
+	needsPreload := shouldPreloadTree(treeName)
+	if !needsPreload {
 		return
 	}
+	log := snapshot.logger
 
-	// For snapshot creation (forWrite=true): Force load all files for EVM
-	log.Info("First loading EVM snapshot files for snapshot creation (nodes/leaves/kvs)")
-
-	_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameNodes))
-	log.Info("Prefetch nodes completed for EVM")
-
-	_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameLeaves))
-	log.Info("Prefetch leaves completed for EVM")
-
-	_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameKVs))
-	log.Info("Prefetch kvs completed for EVM")
-
-	log.Info(fmt.Sprintf("Prefetch EVM for snapshot creation completed in %fs\n", time.Since(startTime).Seconds()))
-}
-
-// dropCacheHint hints the kernel to drop page cache for this snapshot's mmap files
-// This is used before prefetching EVM to make room in tight memory situations (128GB RAM)
-func (snapshot *Snapshot) dropCacheHint() error {
-	var errs []error
-
-	// Drop cache for nodes
-	if len(snapshot.nodes) > 0 {
-		if err := unix.Madvise(snapshot.nodes, unix.MADV_DONTNEED); err != nil {
-			errs = append(errs, fmt.Errorf("failed to drop nodes cache: %w", err))
+	// If most pages are already in page cache, skip prefetch
+	residentNodes, errNodes := residentRatio(snapshot.nodes)
+	residentLeaves, errLeaves := residentRatio(snapshot.leaves)
+	if errNodes == nil && errLeaves == nil {
+		if residentNodes >= prefetchThreshold && residentLeaves >= prefetchThreshold {
+			log.Debug(fmt.Sprintf("Skipped prefetching for tree %s\n", treeName))
+			return
 		}
 	}
 
-	// Drop cache for leaves
-	if len(snapshot.leaves) > 0 {
-		if err := unix.Madvise(snapshot.leaves, unix.MADV_DONTNEED); err != nil {
-			errs = append(errs, fmt.Errorf("failed to drop leaves cache: %w", err))
-		}
+	if residentNodes < prefetchThreshold {
+		log.Info(fmt.Sprintf("Tree %s nodes page cache residency ratio is %f, below threshold %f\n", treeName, residentNodes, prefetchThreshold))
+		_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameNodes))
 	}
 
-	// Drop cache for kvs
-	if len(snapshot.kvs) > 0 {
-		if err := unix.Madvise(snapshot.kvs, unix.MADV_DONTNEED); err != nil {
-			errs = append(errs, fmt.Errorf("failed to drop kvs cache: %w", err))
-		}
+	if residentLeaves < prefetchThreshold {
+		log.Info(fmt.Sprintf("Tree %s leaves page cache residency ratio is %f, below threshold %f\n", treeName, residentLeaves, prefetchThreshold))
+		_ = SequentialReadAndFillPageCache(filepath.Join(snapshotDir, FileNameLeaves))
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("cache drop errors: %v", errs)
-	}
-	return nil
+	log.Info(fmt.Sprintf("Prefetch snapshot for %s completed in %fs. Consider adding more RAM for page cache to avoid preloading during restart.\n", treeName, time.Since(startTime).Seconds()))
 }
 
 // shouldPreloadTree determines if a tree should be preloaded based on size and name
