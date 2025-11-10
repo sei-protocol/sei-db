@@ -21,6 +21,7 @@ import (
 	"github.com/cosmos/iavl"
 	errorutils "github.com/sei-protocol/sei-db/common/errors"
 	"github.com/sei-protocol/sei-db/common/logger"
+	"github.com/sei-protocol/sei-db/common/metrics"
 	"github.com/sei-protocol/sei-db/common/utils"
 	"github.com/sei-protocol/sei-db/proto"
 	"github.com/sei-protocol/sei-db/stream/changelog"
@@ -63,6 +64,8 @@ type DB struct {
 	snapshotKeepRecent uint32
 	// block interval to take a new snapshot
 	snapshotInterval uint32
+	// timestamp of the last successful snapshot creation
+	lastSnapshotTime time.Time
 	// make sure only one snapshot rewrite is running
 	pruneSnapshotLock sync.Mutex
 
@@ -92,7 +95,7 @@ const (
 func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (database *DB, _err error) {
 	startTime := time.Now()
 	defer func() {
-		otelMetrics.RestartLatency.Record(
+		metrics.SeiDBMetrics.RestartLatency.Record(
 			context.Background(),
 			time.Since(startTime).Seconds(),
 			metric.WithAttributes(attribute.Bool("success", _err == nil)),
@@ -213,6 +216,7 @@ func OpenDB(logger logger.Logger, targetVersion int64, opts Options) (database *
 		streamHandler:      streamHandler,
 		snapshotKeepRecent: opts.SnapshotKeepRecent,
 		snapshotInterval:   opts.SnapshotInterval,
+		lastSnapshotTime:   time.Now(), // Initialize to current time on startup
 		snapshotWriterPool: workerPool,
 		opts:               opts,
 	}
@@ -308,9 +312,9 @@ func (db *DB) ApplyChangeSets(changeSets []*proto.NamedChangeSet) (_err error) {
 
 	startTime := time.Now()
 	defer func() {
-		otelMetrics.ApplyChangesetLatency.Record(
+		metrics.SeiDBMetrics.ApplyChangesetLatency.Record(
 			context.Background(),
-			time.Since(startTime).Seconds(),
+			time.Since(startTime).Milliseconds(),
 			metric.WithAttributes(attribute.Bool("success", _err == nil)),
 		)
 	}()
@@ -419,6 +423,8 @@ func (db *DB) checkBackgroundSnapshotRewrite() error {
 		// reset memnode counter
 		TotalMemNodeSize.Store(0)
 		TotalNumOfMemNode.Store(0)
+		// update snapshot timestamp for catch-up detection
+		db.lastSnapshotTime = time.Now()
 		db.logger.Info("switched to new memiavl snapshot", "version", db.MultiTree.Version())
 		db.pruneSnapshots()
 
@@ -484,13 +490,13 @@ func (db *DB) Commit() (version int64, _err error) {
 	startTime := time.Now()
 	defer func() {
 		ctx := context.Background()
-		otelMetrics.CommitLatency.Record(
+		metrics.SeiDBMetrics.CommitLatency.Record(
 			ctx,
-			time.Since(startTime).Seconds(),
+			time.Since(startTime).Milliseconds(),
 			metric.WithAttributes(attribute.Bool("success", _err == nil)),
 		)
-		otelMetrics.MemNodeTotalSize.Record(ctx, TotalMemNodeSize.Load())
-		otelMetrics.NumOfMemNode.Record(ctx, TotalNumOfMemNode.Load())
+		metrics.SeiDBMetrics.MemNodeTotalSize.Record(ctx, TotalMemNodeSize.Load())
+		metrics.SeiDBMetrics.NumOfMemNode.Record(ctx, TotalNumOfMemNode.Load())
 	}()
 
 	db.mtx.Lock()
@@ -559,6 +565,11 @@ func (db *DB) RewriteSnapshot(ctx context.Context) error {
 	targetPath := filepath.Join(db.dir, snapshotDir)
 	if _, err := os.Stat(targetPath); err == nil {
 		db.logger.Info("snapshot already exists, skipping rewrite", "snapshot", snapshotDir)
+		// Ensure 'current' symlink points to this snapshot
+		if err := updateCurrentSymlink(db.dir, snapshotDir); err != nil {
+			db.logger.Error("failed to update current symlink for existing snapshot", "snapshot", snapshotDir, "error", err)
+			return err
+		}
 		return nil
 	}
 
@@ -648,9 +659,24 @@ func (db *DB) rewriteIfApplicable(height int64) {
 	}
 
 	snapshotVersion := db.SnapshotVersion()
+	blocksSinceLastSnapshot := height - snapshotVersion
 
 	// create snapshot when current height - last snapshot height > interval
-	if height-snapshotVersion >= int64(db.snapshotInterval) {
+	if blocksSinceLastSnapshot >= int64(db.snapshotInterval) {
+		// During catch-up (rapid block processing), use a more conservative strategy:
+		// Only create snapshot if:
+		// 1. It's been more than 60 minutes since last snapshot, AND
+		// 2. Block interval is large (> 10000 blocks)
+		// This prevents excessive snapshot creation during state sync catch-up
+		timeSinceLastSnapshot := time.Since(db.lastSnapshotTime)
+		if blocksSinceLastSnapshot > 10000 && timeSinceLastSnapshot < 60*time.Minute {
+			db.logger.Debug("skipping snapshot during catch-up",
+				"blocks_since_last", blocksSinceLastSnapshot,
+				"time_since_last", timeSinceLastSnapshot,
+			)
+			return
+		}
+
 		if err := db.rewriteSnapshotBackground(); err != nil {
 			db.logger.Error("failed to rewrite snapshot in background", "err", err)
 		}
@@ -723,7 +749,7 @@ func (db *DB) rewriteSnapshotBackground() error {
 		ch <- snapshotResult{mtree: mtree}
 		totalElapsed := time.Since(startTime).Seconds()
 		cloned.logger.Info("snapshot rewrite process completed", "duration_sec", totalElapsed, "duration_min", totalElapsed/60)
-		otelMetrics.SnapshotCreationLatency.Record(
+		metrics.SeiDBMetrics.SnapshotCreationLatency.Record(
 			context.Background(),
 			totalElapsed,
 		)
