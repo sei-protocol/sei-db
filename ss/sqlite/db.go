@@ -343,3 +343,31 @@ func (db *Database) RawImport(ch <-chan types.RawSnapshotNode) error {
 func (db *Database) WriteBlockRangeHash(storeKey string, beginBlockRange, endBlockRange int64, hash []byte) error {
 	panic("implement me")
 }
+
+// ============================================================================
+// LtHash Methods (stub implementation for sqlite)
+// ============================================================================
+
+// ApplyCommitHash computes the DB state hash for these changesets.
+func (db *Database) ApplyCommitHash(version int64, changesets []*proto.NamedChangeSet, lastFlushValueGetter types.LastFlushValueGetter) (types.StateHash, []types.KVPair) {
+	// SQLite LtHash not implemented yet
+	return types.StateHash{Version: version}, nil
+}
+
+// ApplyCommitHashWithTimings computes the DB state hash with timing breakdown.
+func (db *Database) ApplyCommitHashWithTimings(version int64, changesets []*proto.NamedChangeSet, lastFlushValueGetter types.LastFlushValueGetter) (types.StateHash, *types.LtHashTimings, []types.KVPair) {
+	// SQLite LtHash not implemented yet
+	return types.StateHash{Version: version}, nil, nil
+}
+
+// GetCommitHash returns the latest DB commit hash.
+func (db *Database) GetCommitHash() types.StateHash {
+	// SQLite LtHash not implemented yet
+	return types.StateHash{}
+}
+
+// GetLtHash returns a copy of the current LtHash vector.
+func (db *Database) GetLtHash() types.LtHasher {
+	// SQLite LtHash not implemented yet
+	return nil
+}

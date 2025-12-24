@@ -6,6 +6,44 @@ import (
 	"github.com/sei-protocol/sei-db/proto"
 )
 
+// LtHasher is an interface for LtHash operations to avoid import cycle.
+type LtHasher interface {
+	MixIn(other interface{})
+	MixOut(other interface{})
+	Checksum() [32]byte
+	Bytes() []byte
+	IsIdentity() bool
+}
+
+// LtHashTimings holds wall-clock timing information for LtHash computation breakdown.
+type LtHashTimings struct {
+	TotalNs     int64 // Total wall-clock time
+	SerializeNs int64 // Serialization phase
+	Blake3Ns    int64 // Blake3 XOF phase
+	MixInOutNs  int64 // MixIn/MixOut phase
+	MergeNs     int64 // Merging worker results
+}
+
+// StateHash represents the commit hash and version.
+type StateHash struct {
+	Hash    []byte
+	Version int64
+}
+
+// KVPair represents a key-value pair with metadata for LtHash.
+type KVPair struct {
+	Key            []byte
+	Value          []byte
+	LastFlushValue []byte // Value at last flush, used for LtHash incremental updates (MixOut)
+	Deleted        bool
+}
+
+// LastFlushValueGetter is a function type for retrieving the last flushed value during LtHash computation.
+// The function takes a storeKey (module name) and a key, and returns the value at last flush.
+// This allows callers to provide last flush values from a deterministic source (e.g., SC/MemIAVL)
+// instead of reading from SS which may be asynchronously lagging.
+type LastFlushValueGetter func(storeKey string, key []byte) []byte
+
 // StateStore is a versioned, embedded Key-Value Store,
 // which allows efficient reads, writes, iteration over a specific version
 type StateStore interface {
@@ -32,6 +70,22 @@ type StateStore interface {
 
 	// ApplyChangesetAsync Write changesets into WAL file first and apply later for async writes
 	ApplyChangesetAsync(version int64, changesets []*proto.NamedChangeSet) error
+
+	// ApplyCommitHash computes the DB state hash for these changesets and returns
+	// the meta key-value pairs that should be persisted alongside the state KV pairs.
+	// If lastFlushValueGetter is non-nil, it will be used to retrieve last flush values
+	// for LtHash delta computation instead of reading from the DB. This ensures determinism
+	// when SS writes are asynchronous and may not yet be visible.
+	ApplyCommitHash(version int64, changesets []*proto.NamedChangeSet, lastFlushValueGetter LastFlushValueGetter) (StateHash, []KVPair)
+
+	// ApplyCommitHashWithTimings is like ApplyCommitHash but also returns timing breakdown.
+	ApplyCommitHashWithTimings(version int64, changesets []*proto.NamedChangeSet, lastFlushValueGetter LastFlushValueGetter) (StateHash, *LtHashTimings, []KVPair)
+
+	// GetCommitHash returns the latest DB commit hash.
+	GetCommitHash() StateHash
+
+	// GetLtHash returns a copy of the current LtHash vector.
+	GetLtHash() LtHasher
 
 	// Import the initial state of the store
 	Import(version int64, ch <-chan SnapshotNode) error

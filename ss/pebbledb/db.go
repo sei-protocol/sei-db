@@ -20,6 +20,7 @@ import (
 	"github.com/sei-protocol/sei-db/proto"
 	"github.com/sei-protocol/sei-db/ss/types"
 	"github.com/sei-protocol/sei-db/ss/util"
+	"github.com/sei-protocol/sei-db/ss/util/lthash"
 	"github.com/sei-protocol/sei-db/stream/changelog"
 	"golang.org/x/exp/slices"
 )
@@ -74,6 +75,11 @@ type Database struct {
 	lastRangeHashedCache int64
 	lastRangeHashedMu    sync.RWMutex
 	hashComputationMu    sync.Mutex
+
+	// LtHash state
+	ltHash        *lthash.LtHash
+	ltHashVersion int64
+	ltHashMu      sync.RWMutex
 }
 
 type VersionedChangesets struct {
@@ -159,6 +165,7 @@ func New(dataDir string, config config.StateStoreConfig) (*Database, error) {
 func NewWithDB(storage *pebble.DB) *Database {
 	return &Database{
 		storage: storage,
+		ltHash:  lthash.NewEmptyLtHash(),
 	}
 }
 
@@ -1047,4 +1054,97 @@ func retrieveLastRangeHashed(db *pebble.DB) (int64, error) {
 		return 0, nil
 	}
 	return int64(binary.LittleEndian.Uint64(bz)), nil
+}
+
+// ============================================================================
+// LtHash Methods
+// ============================================================================
+
+// ApplyCommitHash computes the DB state hash for these changesets.
+func (db *Database) ApplyCommitHash(version int64, changesets []*proto.NamedChangeSet, lastFlushValueGetter types.LastFlushValueGetter) (types.StateHash, []types.KVPair) {
+	stateHash, _, metaKVs := db.ApplyCommitHashWithTimings(version, changesets, lastFlushValueGetter)
+	return stateHash, metaKVs
+}
+
+// ApplyCommitHashWithTimings computes the DB state hash with timing breakdown.
+func (db *Database) ApplyCommitHashWithTimings(version int64, changesets []*proto.NamedChangeSet, lastFlushValueGetter types.LastFlushValueGetter) (types.StateHash, *types.LtHashTimings, []types.KVPair) {
+	db.ltHashMu.Lock()
+	defer db.ltHashMu.Unlock()
+
+	totalTimings := &types.LtHashTimings{}
+
+	// Compute delta for each changeset
+	for _, cs := range changesets {
+		if cs == nil || len(cs.Changeset.Pairs) == 0 {
+			continue
+		}
+
+		// Convert changeset to KVPairWithOldValue
+		kvPairs := make([]lthash.KVPairWithOldValue, 0, len(cs.Changeset.Pairs))
+		for _, pair := range cs.Changeset.Pairs {
+			var lastFlushValue []byte
+			if lastFlushValueGetter != nil {
+				lastFlushValue = lastFlushValueGetter(cs.Name, pair.Key)
+			}
+
+			kvPairs = append(kvPairs, lthash.KVPairWithOldValue{
+				Key:            pair.Key,
+				Value:          pair.Value,
+				LastFlushValue: lastFlushValue,
+				Deleted:        len(pair.Value) == 0,
+			})
+		}
+
+		// Compute delta
+		delta, timings := lthash.ComputeLtHashDeltaParallel(cs.Name, kvPairs, 0)
+
+		// Apply delta to global LtHash
+		db.ltHash.MixIn(delta)
+
+		// Accumulate timings
+		if timings != nil {
+			totalTimings.TotalNs += timings.TotalNs
+			totalTimings.SerializeNs += timings.SerializeNs
+			totalTimings.Blake3Ns += timings.Blake3Ns
+			totalTimings.MixInOutNs += timings.MixInOutNs
+			totalTimings.MergeNs += timings.MergeNs
+		}
+	}
+
+	db.ltHashVersion = version
+
+	// Compute checksum
+	checksum := db.ltHash.Checksum()
+
+	return types.StateHash{
+		Hash:    checksum[:],
+		Version: version,
+	}, totalTimings, nil
+}
+
+// GetCommitHash returns the latest DB commit hash.
+func (db *Database) GetCommitHash() types.StateHash {
+	db.ltHashMu.RLock()
+	defer db.ltHashMu.RUnlock()
+
+	if db.ltHash == nil {
+		return types.StateHash{}
+	}
+
+	checksum := db.ltHash.Checksum()
+	return types.StateHash{
+		Hash:    checksum[:],
+		Version: db.ltHashVersion,
+	}
+}
+
+// GetLtHash returns a copy of the current LtHash vector.
+func (db *Database) GetLtHash() types.LtHasher {
+	db.ltHashMu.RLock()
+	defer db.ltHashMu.RUnlock()
+
+	if db.ltHash == nil {
+		return lthash.NewEmptyLtHash()
+	}
+	return db.ltHash.Clone()
 }
