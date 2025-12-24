@@ -1071,6 +1071,11 @@ func (db *Database) ApplyCommitHashWithTimings(version int64, changesets []*prot
 	db.ltHashMu.Lock()
 	defer db.ltHashMu.Unlock()
 
+	// Lazy initialization of LtHash (for databases opened from existing data)
+	if db.ltHash == nil {
+		db.ltHash = lthash.NewEmptyLtHash()
+	}
+
 	totalTimings := &types.LtHashTimings{}
 
 	// Compute delta for each changeset
