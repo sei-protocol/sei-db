@@ -9,9 +9,9 @@ import (
 	math "math"
 	math_bits "math/bits"
 
-	"github.com/cosmos/iavl"
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
+	iavl "github.com/cosmos/iavl"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.

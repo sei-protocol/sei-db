@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/spf13/cobra"
+
 	"github.com/sei-protocol/sei-db/common/logger"
 	"github.com/sei-protocol/sei-db/config"
 	"github.com/sei-protocol/sei-db/proto"
-	"github.com/sei-protocol/sei-db/ss"
-	"github.com/sei-protocol/sei-db/ss/types"
-	"github.com/sei-protocol/sei-db/stream/changelog"
-	"github.com/spf13/cobra"
+	"github.com/sei-protocol/sei-db/state_db/ss"
+	"github.com/sei-protocol/sei-db/state_db/ss/types"
+	"github.com/sei-protocol/sei-db/wal"
 )
 
 var ssStore types.StateStore
@@ -41,7 +42,7 @@ func executeReplayChangelog(cmd *cobra.Command, _ []string) {
 	}
 
 	logDir := filepath.Join(dbDir, "changelog")
-	stream, err := changelog.NewStream(logger.NewNopLogger(), logDir, changelog.Config{})
+	stream, err := wal.NewChangelogWAL(logger.NewNopLogger(), logDir, wal.Config{})
 	if err != nil {
 		panic(err)
 	}
@@ -91,19 +92,11 @@ func executeReplayChangelog(cmd *cobra.Command, _ []string) {
 
 func processChangelogEntry(index uint64, entry proto.ChangelogEntry) error {
 	fmt.Printf("Offset: %d, Height: %d\n", index, entry.Version)
-	for _, changeset := range entry.Changesets {
-		storeName := changeset.Name
-		for _, kv := range changeset.Changeset.Pairs {
-			if dryRun {
-				fmt.Printf("store: %s, key: %X\n", storeName, kv.Key)
-			}
-		}
-		if ssStore != nil {
-			fmt.Printf("Re-applied changeset for height %d\n", entry.Version)
-			err := ssStore.ApplyChangeset(entry.Version, changeset)
-			if err != nil {
-				return err
-			}
+	if ssStore != nil {
+		fmt.Printf("Re-applied changeset for height %d\n", entry.Version)
+		err := ssStore.ApplyChangesetSync(entry.Version, entry.Changesets)
+		if err != nil {
+			return err
 		}
 	}
 	return nil

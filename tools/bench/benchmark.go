@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cosmos/iavl"
+	iavl "github.com/cosmos/iavl"
 	"github.com/sei-protocol/sei-db/proto"
-	"github.com/sei-protocol/sei-db/ss/types"
+	"github.com/sei-protocol/sei-db/state_db/ss/types"
 	"github.com/sei-protocol/sei-db/tools/utils"
 )
 
@@ -61,7 +61,7 @@ func writeToDBConcurrently(db types.StateStore, allKVs []utils.KeyValuePair, con
 				}
 				ncs.Changeset = *cs
 				startTime := time.Now()
-				err := db.ApplyChangeset(version, ncs)
+				err := db.ApplyChangesetSync(version, []*proto.NamedChangeSet{ncs})
 				latency := time.Since(startTime)
 
 				if err == nil {

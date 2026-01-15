@@ -1,10 +1,10 @@
 package config
 
-// DefaultConfigTemplate defines the configuration template for the seiDB configuration
-const DefaultConfigTemplate = `
-#############################################################################
-###                             SeiDB Configuration                       ###
-#############################################################################
+// StateCommitConfigTemplate defines the configuration template for state-commit
+const StateCommitConfigTemplate = `
+###############################################################################
+###                       State Commit Configuration                        ###
+###############################################################################
 
 [state-commit]
 # Enable defines if the SeiDB should be enabled to override existing IAVL db backend.
@@ -29,12 +29,33 @@ sc-keep-recent = {{ .StateCommit.SnapshotKeepRecent }}
 # SnapshotInterval defines the block interval the snapshot is taken, default to 10000 blocks.
 sc-snapshot-interval = {{ .StateCommit.SnapshotInterval }}
 
+# SnapshotMinTimeInterval defines the minimum time interval (in seconds) between snapshots.
+# This prevents excessive snapshot creation during catch-up and ensures snapshots don't overlap
+# (current snapshot creation takes 3+ hours). Default to 3600 seconds (1 hour).
+# Note: If you set a small sc-snapshot-interval (e.g., < 5000), you may want to reduce this value
+# to allow more frequent snapshots during normal operation.
+sc-snapshot-min-time-interval = {{ .StateCommit.SnapshotMinTimeInterval }}
+
 # SnapshotWriterLimit defines the max concurrency for taking commit store snapshot
 sc-snapshot-writer-limit = {{ .StateCommit.SnapshotWriterLimit }}
+
+# SnapshotPrefetchThreshold defines the page cache residency threshold (0.0-1.0) to trigger snapshot prefetch.
+# Prefetch sequentially reads nodes/leaves files into page cache for faster cold-start replay.
+# Only active trees (evm/bank/acc) are prefetched, skipping sparse kv files to save memory.
+# Skips prefetch if more than threshold of pages already resident (e.g., 0.8 = 80%).
+# Setting to 0 disables prefetching. Defaults to 0.8
+sc-snapshot-prefetch-threshold = {{ .StateCommit.SnapshotPrefetchThreshold }}
 
 # OnlyAllowExportOnSnapshotVersion defines whether we only allow state sync
 # snapshot creation happens after the memiavl snapshot is created.
 sc-only-allow-export-on-snapshot-version = {{ .StateCommit.OnlyAllowExportOnSnapshotVersion }}
+`
+
+// StateStoreConfigTemplate defines the configuration template for state-store
+const StateStoreConfigTemplate = `
+###############################################################################
+###                         State Store Configuration                       ###
+###############################################################################
 
 [state-store]
 # Enable defines whether the state-store should be enabled for storing historical data.
@@ -69,9 +90,7 @@ ss-prune-interval = {{ .StateStore.PruneIntervalSeconds }}
 # ImportNumWorkers defines the concurrency for state sync import
 # defaults to 1
 ss-import-num-workers = {{ .StateStore.ImportNumWorkers }}
-
-# HashRange defines the range of blocks after which a XOR hash is computed and stored
-# defaults to 1,000,000 blocks
-ss-hash-range = {{ .StateStore.HashRange }}
-
 `
+
+// DefaultConfigTemplate combines both templates for backward compatibility
+const DefaultConfigTemplate = StateCommitConfigTemplate + StateStoreConfigTemplate

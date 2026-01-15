@@ -1,15 +1,15 @@
 package config
 
 const (
-	DefaultSnapshotInterval   = 10000
-	DefaultSnapshotKeepRecent = 0 // set to 0 to only keep one current snapshot
-	DefaultAsyncCommitBuffer  = 100
-	DefaultCacheSize          = 100000
-	DefaultSSKeepRecent       = 100000
-	DefaultSSPruneInterval    = 600
-	DefaultSSImportWorkers    = 1
-	DefaultSSAsyncBuffer      = 100
-	DefaultSSHashRange        = 1000000
+	DefaultSnapshotInterval          = 10000
+	DefaultSnapshotKeepRecent        = 0       // set to 0 to only keep one current snapshot
+	DefaultSnapshotMinTimeInterval   = 60 * 60 // 1 hour in seconds
+	DefaultAsyncCommitBuffer         = 100
+	DefaultSnapshotPrefetchThreshold = 0.8 // prefetch if <80% pages in cache
+	DefaultSSKeepRecent              = 100000
+	DefaultSSPruneInterval           = 600
+	DefaultSSImportWorkers           = 1
+	DefaultSSAsyncBuffer             = 100
 )
 
 type StateCommitConfig struct {
@@ -40,8 +40,20 @@ type StateCommitConfig struct {
 	// SnapshotInterval defines the block interval the memiavl snapshot is taken, default to 10000.
 	SnapshotInterval uint32 `mapstructure:"snapshot-interval"`
 
+	// SnapshotMinTimeInterval defines the minimum time interval (in seconds) between snapshots.
+	// This prevents excessive snapshot creation during catch-up. Default to 3600 seconds (1 hour).
+	SnapshotMinTimeInterval uint32 `mapstructure:"snapshot-min-time-interval"`
+
 	// SnapshotWriterLimit defines the concurrency for taking commit store snapshot
 	SnapshotWriterLimit int `mapstructure:"snapshot-writer-limit"`
+
+	// SnapshotPrefetchThreshold defines the page cache residency threshold (0.0-1.0)
+	// to trigger snapshot prefetch during cold-start.
+	// Prefetch sequentially reads nodes/leaves files into page cache for faster replay.
+	// Only active trees (evm/bank/acc) are prefetched, skipping sparse kv files.
+	// Skips prefetch if >threshold of pages already resident (e.g., 0.8 = 80%).
+	// Setting to 0 disables prefetching. Defaults to 0.8
+	SnapshotPrefetchThreshold float64 `mapstructure:"snapshot-prefetch-threshold"`
 
 	// CacheSize defines the size of the cache for each memiavl store.
 	// Deprecated: this is removed, we will just rely on mmap page cache
@@ -88,18 +100,16 @@ type StateStoreConfig struct {
 	// Whether to keep last version of a key during pruning or delete
 	// defaults to true
 	KeepLastVersion bool `mapstructure:"keep-last-version"`
-
-	// Range of blocks after which a XOR hash is computed and stored
-	// defaults to 1,000,000 blocks
-	HashRange int64 `json:"hash_range"`
 }
 
 func DefaultStateCommitConfig() StateCommitConfig {
 	return StateCommitConfig{
-		Enable:             true,
-		AsyncCommitBuffer:  DefaultAsyncCommitBuffer,
-		SnapshotInterval:   DefaultSnapshotInterval,
-		SnapshotKeepRecent: DefaultSnapshotKeepRecent,
+		Enable:                    true,
+		AsyncCommitBuffer:         DefaultAsyncCommitBuffer,
+		SnapshotInterval:          DefaultSnapshotInterval,
+		SnapshotKeepRecent:        DefaultSnapshotKeepRecent,
+		SnapshotMinTimeInterval:   DefaultSnapshotMinTimeInterval,
+		SnapshotPrefetchThreshold: DefaultSnapshotPrefetchThreshold,
 	}
 }
 
@@ -112,6 +122,5 @@ func DefaultStateStoreConfig() StateStoreConfig {
 		PruneIntervalSeconds: DefaultSSPruneInterval,
 		ImportNumWorkers:     DefaultSSImportWorkers,
 		KeepLastVersion:      true,
-		HashRange:            DefaultSSHashRange,
 	}
 }

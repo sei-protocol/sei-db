@@ -1,7 +1,3 @@
-
-> [!IMPORTANT]
-> This repository has been archived and is moved to [`sei-chain`](https://github.com/sei-protocol/sei-chain) as a nested module.
-
 # SeiDB
 SeiDB is the next-gen on-chain database which is designed to replace the [IAVL Store](https://github.com/cosmos/iavl) of Cosmos based chain.
 The goal of SeiDB is to improve the overall data access performance and prevent state bloat issues.
